@@ -129,7 +129,7 @@ class CodingAgentService:
 
     def _watchdog_loop(self):
         """
-        Monitors running tasks. Cancels tasks that run longer than 5 minutes
+        Monitors running tasks. Cancels tasks that run longer than 30 minutes
         or fail to update their heartbeat for 120 seconds.
         """
         from external_software import TaskStatusRegistry
@@ -146,13 +146,13 @@ class CodingAgentService:
                 task_id = task["task_id"]
                 start_time = task.get("created_at") or now
                 
-                # Check 1: Elapsed time timeout (5 minutes = 300 seconds)
+                # Check 1: Elapsed time timeout (30 minutes = 1800 seconds)
                 elapsed = now - start_time
-                if elapsed > 300:
-                    print(f"⚠️ Watchdog: Task {task_id} exceeded maximum duration limit (300s). Cancelling.")
+                if elapsed > 1800:
+                    print(f"⚠️ Watchdog: Task {task_id} exceeded maximum duration limit (1800s). Cancelling.")
                     self.cancel_task(task_id)
                     with self.lock:
-                        self.tasks_status[task_id]["errors"] = "Timeout: Task exceeded maximum execution limit of 300s."
+                        self.tasks_status[task_id]["errors"] = "Timeout: Task exceeded maximum execution limit of 1800s."
                     self._save_history()
                     continue
                     
