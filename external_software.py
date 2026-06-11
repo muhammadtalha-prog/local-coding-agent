@@ -110,8 +110,9 @@ class ExternalSoftwareAgent:
         # Resolve 'python' or 'python3' to venv's python interpreter to prevent Windows Store hangs
         from tools import get_venv_path
         python_exe, _ = get_venv_path(cwd)
-        # Use regex to replace all standalone occurrences of python/python3
-        command = re.sub(r'\bpython3?\b', f'"{python_exe}"', command)
+        # Use regex to replace all standalone occurrences of python/python3. Escape backslashes in path for re.sub on Windows.
+        python_exe_escaped = f'"{python_exe}"'.replace('\\', '\\\\')
+        command = re.sub(r'\bpython3?\b', python_exe_escaped, command)
 
         # Handle mock MATLAB execution if MATLAB is not installed
         if command.startswith("matlab "):
