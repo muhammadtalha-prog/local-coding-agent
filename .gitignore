@@ -1,0 +1,23 @@
+# Virtual Environment
+venv/
+.venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment configurations
+.env
+.env.local
+
+# IDEs
+.vscode/
+.idea/
+.DS_Store
+
+# Workspace run data and backups
+workspace/
+backup.zip
+*.json
