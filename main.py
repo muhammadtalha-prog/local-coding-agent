@@ -31,7 +31,7 @@ def execute_single_task(description: str, test_cmd: str, language: str, max_iter
         status = service.get_task_status(task_id)
         current_status = status.get("status")
         print(f"🕒 Task {task_id} status: {current_status}")
-        if current_status in ("PASSED", "FAILED", "ERROR"):
+        if current_status in ("PASSED", "FAILED", "ERROR", "CANCELLED"):
             print(f"\n🏁 Task Finished!")
             print(f"Status: {current_status}")
             print(f"Iterations: {status.get('iterations')}")
@@ -87,7 +87,7 @@ def execute_batch_tasks(batch_file: str, concurrency: int):
                 continue
             status = service.get_task_status(tid)
             current_status = status.get("status")
-            if current_status in ("PASSED", "FAILED", "ERROR"):
+            if current_status in ("PASSED", "FAILED", "ERROR", "CANCELLED"):
                 completed.add(tid)
                 print(f"✅ Batch Task {tid} finished with status: {current_status}")
         time.sleep(3)

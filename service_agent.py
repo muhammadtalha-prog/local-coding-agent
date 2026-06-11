@@ -130,7 +130,7 @@ class CodingAgentService:
     def _watchdog_loop(self):
         """
         Monitors running tasks. Cancels tasks that run longer than 5 minutes
-        or fail to update their heartbeat for 60 seconds.
+        or fail to update their heartbeat for 120 seconds.
         """
         from external_software import TaskStatusRegistry
         while self.running:
@@ -156,17 +156,17 @@ class CodingAgentService:
                     self._save_history()
                     continue
                     
-                # Check 2: Heartbeat timeout (60 seconds)
+                # Check 2: Heartbeat timeout (120 seconds)
                 last_heartbeat = TaskStatusRegistry.get_last_heartbeat(task_id)
                 if last_heartbeat == 0.0:
                     last_heartbeat = start_time
                     
                 time_since_heartbeat = now - last_heartbeat
-                if time_since_heartbeat > 60:
-                    print(f"⚠️ Watchdog: Task {task_id} heartbeat lost for {time_since_heartbeat:.1f}s (limit 60s). Cancelling.")
+                if time_since_heartbeat > 120:
+                    print(f"⚠️ Watchdog: Task {task_id} heartbeat lost for {time_since_heartbeat:.1f}s (limit 120s). Cancelling.")
                     self.cancel_task(task_id)
                     with self.lock:
-                        self.tasks_status[task_id]["errors"] = "Timeout: Heartbeat lost (no progress for 60 seconds)."
+                        self.tasks_status[task_id]["errors"] = "Timeout: Heartbeat lost (no progress for 120 seconds)."
                     self._save_history()
 
     def _worker_loop(self):
@@ -195,6 +195,17 @@ class CodingAgentService:
                 from external_software import TaskStatusRegistry
                 TaskStatusRegistry.update_heartbeat(task_id)
                 
+                # Start a background heartbeat updater thread for the duration of graph.invoke
+                # to prevent watchdog timeouts during slow local LLM generations.
+                heartbeat_stop = threading.Event()
+                def worker_heartbeat():
+                    while not heartbeat_stop.is_set():
+                        TaskStatusRegistry.update_heartbeat(task_id)
+                        heartbeat_stop.wait(timeout=10)
+                
+                updater = threading.Thread(target=worker_heartbeat, name=f"WorkerHB-{task_id}", daemon=True)
+                updater.start()
+                
                 # Prepare initial state for the LangGraph agent
                 initial_state = {
                     "description": task_info["description"],
@@ -210,8 +221,13 @@ class CodingAgentService:
                     "task_id": task_id
                 }
                 
-                # Invoke the LangGraph graph
-                final_state = graph.invoke(initial_state)
+                try:
+                    # Invoke the LangGraph graph
+                    final_state = graph.invoke(initial_state)
+                finally:
+                    heartbeat_stop.set()
+                    # Wait briefly for the updater thread to join
+                    updater.join(timeout=1)
                 
                 # Populate completion details
                 files = list_workspace_files(workspace_dir)
