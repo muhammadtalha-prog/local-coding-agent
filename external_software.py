@@ -101,17 +101,17 @@ class ExternalSoftwareAgent:
         except Exception as e:
             return f"Error writing script: {str(e)}"
 
-    def execute_command(self, command: str, cwd: str, timeout: int = 15, task_id: str = None) -> dict:
+    def execute_command(self, command: str, cwd: str, timeout: int = 60, task_id: str = None) -> dict:
         """
         Runs a generic shell command inside the specified workspace directory.
-        Resolves 'python' to the active venv path. Supports mock MATLAB.
-        Tracks processes for task cancellation.
+        Resolves 'python' and 'python3' to the active venv path using regex to support chained calls.
+        Tracks processes for task cancellation and spawns a thread to update task heartbeats.
         """
-        # Resolve 'python' to venv's python interpreter to prevent Windows Store hangs
-        if command.startswith("python "):
-            from tools import get_venv_path
-            python_exe, _ = get_venv_path(cwd)
-            command = command.replace("python ", f'"{python_exe}" ', 1)
+        # Resolve 'python' or 'python3' to venv's python interpreter to prevent Windows Store hangs
+        from tools import get_venv_path
+        python_exe, _ = get_venv_path(cwd)
+        # Use regex to replace all standalone occurrences of python/python3
+        command = re.sub(r'\bpython3?\b', f'"{python_exe}"', command)
 
         # Handle mock MATLAB execution if MATLAB is not installed
         if command.startswith("matlab "):
@@ -136,6 +136,20 @@ class ExternalSoftwareAgent:
             # Register process
             ProcessRegistry.register(task_id, proc)
             
+            # Start background heartbeat updater thread to prevent watchdog timeouts
+            # during long-running tool or script execution.
+            heartbeat_stop_event = threading.Event()
+            def heartbeat_updater():
+                while not heartbeat_stop_event.is_set():
+                    if proc.poll() is not None:
+                        break
+                    TaskStatusRegistry.update_heartbeat(task_id)
+                    heartbeat_stop_event.wait(timeout=10)
+
+            if task_id:
+                updater_thread = threading.Thread(target=heartbeat_updater, name=f"Heartbeat-{task_id}", daemon=True)
+                updater_thread.start()
+            
             try:
                 stdout, stderr = proc.communicate(timeout=timeout)
                 return {
@@ -152,6 +166,8 @@ class ExternalSoftwareAgent:
                     "stderr": f"Execution timed out after {timeout} seconds."
                 }
             finally:
+                if task_id:
+                    heartbeat_stop_event.set()
                 ProcessRegistry.unregister(task_id, proc)
                 
         except Exception as e:

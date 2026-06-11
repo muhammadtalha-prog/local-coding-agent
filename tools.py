@@ -6,23 +6,32 @@ from config import WORKSPACE_DIR
 def get_venv_path(workspace_dir=None):
     """
     Returns the path to the virtual environment python executable.
-    Tries to reuse the project's root virtual environment if it exists
-    to prevent performance overhead and device lag. Otherwise, creates one.
+    If a requirements.txt file exists in the isolated workspace, creates and returns
+    a dedicated task-isolated venv to prevent permission/write conflicts in parallel runs.
+    Otherwise, reuses the root virtual environment to avoid performance overhead and CPU lag.
     """
-    # 1. Try to find and reuse a root virtual environment
-    project_root = os.path.abspath(os.path.dirname(__file__))
-    root_venv_dir = os.path.join(project_root, "venv")
-    if os.name == 'nt': # Windows
-        root_python_exe = os.path.join(root_venv_dir, "Scripts", "python.exe")
-        root_pip_exe = os.path.join(root_venv_dir, "Scripts", "pip.exe")
-    else: # Unix/Mac
-        root_python_exe = os.path.join(root_venv_dir, "bin", "python")
-        root_pip_exe = os.path.join(root_venv_dir, "bin", "pip")
+    # Check if this task workspace has custom dependencies configured via requirements.txt
+    need_isolated = False
+    if workspace_dir:
+        req_path = os.path.join(workspace_dir, "requirements.txt")
+        if os.path.exists(req_path):
+            need_isolated = True
 
-    if os.path.exists(root_python_exe):
-        return root_python_exe, root_pip_exe
+    # 1. Reuse the root virtual environment if no custom local requirements are specified
+    if not need_isolated:
+        project_root = os.path.abspath(os.path.dirname(__file__))
+        root_venv_dir = os.path.join(project_root, "venv")
+        if os.name == 'nt': # Windows
+            root_python_exe = os.path.join(root_venv_dir, "Scripts", "python.exe")
+            root_pip_exe = os.path.join(root_venv_dir, "Scripts", "pip.exe")
+        else: # Unix/Mac
+            root_python_exe = os.path.join(root_venv_dir, "bin", "python")
+            root_pip_exe = os.path.join(root_venv_dir, "bin", "pip")
 
-    # 2. Fallback to local workspace venv creation
+        if os.path.exists(root_python_exe):
+            return root_python_exe, root_pip_exe
+
+    # 2. Fallback to local workspace-isolated venv creation
     if workspace_dir is None:
         workspace_dir = WORKSPACE_DIR
         
@@ -36,17 +45,17 @@ def get_venv_path(workspace_dir=None):
         python_exe = os.path.join(venv_dir, "bin", "python")
         pip_exe = os.path.join(venv_dir, "bin", "pip")
 
-    # Initialize venv if python executable is not present
+    # Initialize isolated venv if python executable is not present
     if not os.path.exists(python_exe):
-        print(f"📦 Virtual environment not found or incomplete. Creating venv inside {workspace_dir}...")
+        print(f"📦 Virtual environment not found or incomplete. Creating isolated venv inside {workspace_dir}...")
         try:
             if os.path.exists(venv_dir):
                 import shutil
                 shutil.rmtree(venv_dir, ignore_errors=True)
             subprocess.run([sys.executable, "-m", "venv", venv_dir], check=True)
-            print("✅ Virtual environment created successfully.")
+            print("✅ Isolated virtual environment created successfully.")
         except Exception as e:
-            print(f"❌ Failed to create virtual environment: {e}")
+            print(f"❌ Failed to create isolated virtual environment: {e}")
             return sys.executable, "pip" # Fallback to global python and pip
 
     return python_exe, pip_exe
@@ -124,7 +133,7 @@ def install_workspace_requirements(workspace_dir=None):
     except subprocess.CalledProcessError as e:
         return f"Error installing dependencies:\nStdout: {e.stdout}\nStderr: {e.stderr}"
 
-def execute_external_command_tool(command: str, workspace_dir: str = None, timeout: int = 15, task_id: str = None) -> str:
+def execute_external_command_tool(command: str, workspace_dir: str = None, timeout: int = 60, task_id: str = None) -> str:
     """
     Executes a shell command inside the specified workspace directory.
     """
@@ -149,7 +158,7 @@ def test_python_file(relative_path, workspace_dir=None, task_id=None):
     
     from external_software import ExternalSoftwareAgent
     agent = ExternalSoftwareAgent()
-    res = agent.execute_command(command, workspace_dir, timeout=15, task_id=task_id)
+    res = agent.execute_command(command, workspace_dir, timeout=60, task_id=task_id)
     
     status = "PASSED" if res["exit_code"] == 0 else "FAILED"
     if res["exit_code"] == -1:

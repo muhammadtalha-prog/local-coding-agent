@@ -3,6 +3,10 @@ import os
 import argparse
 import json
 import time
+
+# Ensure current directory is in sys.path for robust import resolutions
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 from service_agent import CodingAgentService
 
 def print_banner():

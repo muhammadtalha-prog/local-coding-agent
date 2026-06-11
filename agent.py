@@ -4,7 +4,7 @@ import re
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, AIMessage, ToolMessage
 from langgraph.graph import StateGraph, END
 
-from config import get_llm
+from config import get_llm, WORKSPACE_DIR
 from prompt import AGENT_SYSTEM_PROMPT, get_coder_prompt
 from tools import (
     list_workspace_files,
@@ -296,7 +296,7 @@ def execute_tools_node(state: AgentState) -> Dict[str, Any]:
                     tool_res = execute_external_command_tool(
                         args.get("command"), 
                         workspace_dir=workspace_dir, 
-                        timeout=args.get("timeout", 15), 
+                        timeout=args.get("timeout", 60), 
                         task_id=task_id
                     )
                 elif name == "test_python_file_tool":
@@ -331,7 +331,7 @@ def execution_node(state: AgentState) -> Dict[str, Any]:
             print(f"🛑 Task {task_id} has been cancelled. Terminating execution loop.")
             return {"errors": "Task cancelled by user."}
 
-    workspace_dir = state.get("workspace_dir")
+    workspace_dir = state.get("workspace_dir") or os.path.abspath(WORKSPACE_DIR)
     test_command = state.get("test_command")
     language = state.get("language", "python")
     
@@ -351,7 +351,7 @@ def execution_node(state: AgentState) -> Dict[str, Any]:
     else:
         software_agent = ExternalSoftwareAgent()
         
-    res = software_agent.execute_command(test_command, workspace_dir, timeout=15, task_id=task_id)
+    res = software_agent.execute_command(test_command, workspace_dir, timeout=60, task_id=task_id)
     
     errors_found = ""
     status = "PASSED" if res["exit_code"] == 0 else "FAILED"
