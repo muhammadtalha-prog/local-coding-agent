@@ -128,11 +128,7 @@ def parse_ollama_tool_call(content: str) -> List[Dict[str, Any]]:
             if calls:
                 return calls
     except json.JSONDecodeError:
-        data = parse_with_regex(content_str)
-        if data:
-            call = extract_call(data)
-            if call:
-                return [call]
+        pass
 
     # 2. Try extracting JSON from markdown code blocks
     code_blocks = re.findall(r"```(?:json)?\s*([\s\S]+?)\s*```", content_str)
@@ -240,8 +236,16 @@ Stack trace / Error details:
 Review the files, locate the bugs, edit the files, and verify with your execution/testing tools again.
 """
         messages.append(HumanMessage(content=error_context))
+
+    # Construct active messages list with updated workspace file state to prevent loops
+    active_messages = list(messages)
+    if len(active_messages) > 2:
+        current_files = list_workspace_files(workspace_dir=state.get("workspace_dir"))
+        state_context = f"### CURRENT WORKSPACE STATE UPDATE\nFiles currently in workspace:\n" + \
+                        ("\n".join([f"- {f}" for f in current_files]) if current_files else "No files yet.")
+        active_messages.append(HumanMessage(content=state_context))
         
-    response = llm.invoke(messages)
+    response = llm.invoke(active_messages)
     print(f"DEBUG: Model response content: {repr(response.content)}")
     
     # Parse tool calls from the raw content manually since we do not bind tools
@@ -278,27 +282,53 @@ def execute_tools_node(state: AgentState) -> Dict[str, Any]:
     if last_message.tool_calls:
         for tool_call in last_message.tool_calls:
             name = tool_call["name"]
-            args = tool_call["args"]
+            args = tool_call["args"] or {}
             tool_call_id = tool_call["id"]
             
-            print(f"🛠️ Executing Tool: {name}({str(args)})")
+            print(f"🛠️ Executing Tool (Robust Mode): {name}({str(args)})")
             
             try:
+                # 1. Handle auto-writing files if relative_path and content are both in arguments
+                auto_write_res = ""
+                has_write = "relative_path" in args and "content" in args
+                if has_write:
+                    auto_write_res = write_code_file(args.get("relative_path"), args.get("content"), workspace_dir=workspace_dir)
+                    print(f"📝 Auto-wrote file {args.get('relative_path')}: {auto_write_res}")
+
+                # 2. Handle running command if command is in arguments
+                auto_cmd_res = ""
+                has_command = "command" in args or name == "execute_external_command_tool"
+                if has_command:
+                    cmd = args.get("command")
+                    if not cmd and name == "execute_external_command_tool":
+                        cmd = args.get("relative_path") # sometimes model puts command in relative_path
+                    if cmd:
+                        print(f"💻 Running auto-command: {cmd}")
+                        auto_cmd_res = execute_external_command_tool(
+                            cmd, 
+                            workspace_dir=workspace_dir, 
+                            timeout=args.get("timeout", 60), 
+                            task_id=task_id
+                        )
+
+                # 3. Standard routing fallback if neither auto-write nor auto-command executed, or to augment them
                 if name == "list_workspace_files_tool":
                     tool_res = list_workspace_files(workspace_dir=workspace_dir)
                 elif name == "read_code_file_tool":
-                    tool_res = read_code_file(args.get("relative_path"), workspace_dir=workspace_dir)
+                    if not has_write:
+                        tool_res = read_code_file(args.get("relative_path"), workspace_dir=workspace_dir)
+                    else:
+                        tool_res = f"Success: {auto_write_res}"
+                        if auto_cmd_res:
+                            tool_res += f"\nCommand Execution Results:\n{auto_cmd_res}"
                 elif name == "write_code_file_tool":
-                    tool_res = write_code_file(args.get("relative_path"), args.get("content"), workspace_dir=workspace_dir)
+                    tool_res = f"Success: {auto_write_res}"
+                    if auto_cmd_res:
+                        tool_res += f"\nCommand Execution Results:\n{auto_cmd_res}"
                 elif name == "install_requirements_tool":
                     tool_res = install_workspace_requirements(workspace_dir=workspace_dir)
                 elif name == "execute_external_command_tool":
-                    tool_res = execute_external_command_tool(
-                        args.get("command"), 
-                        workspace_dir=workspace_dir, 
-                        timeout=args.get("timeout", 60), 
-                        task_id=task_id
-                    )
+                    tool_res = auto_cmd_res
                 elif name == "test_python_file_tool":
                     tool_res = test_python_file(
                         args.get("relative_path"), 
@@ -308,7 +338,15 @@ def execute_tools_node(state: AgentState) -> Dict[str, Any]:
                     if isinstance(tool_res, dict):
                         tool_res = f"Status: {tool_res['status']}\nExit Code: {tool_res['exit_code']}\nStdout:\n{tool_res['stdout']}\nStderr/Errors:\n{tool_res['stderr']}"
                 else:
-                    tool_res = f"Error: Tool {name} not found."
+                    # Fallback/default logic
+                    if has_write or has_command:
+                        tool_res = ""
+                        if has_write:
+                            tool_res += f"Success: {auto_write_res}"
+                        if auto_cmd_res:
+                            tool_res += f"\nCommand Execution Results:\n{auto_cmd_res}"
+                    else:
+                        tool_res = f"Error: Tool {name} not found."
             except Exception as e:
                 tool_res = f"Error executing tool: {str(e)}"
                 

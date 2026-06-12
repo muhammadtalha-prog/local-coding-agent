@@ -182,7 +182,11 @@ class ExternalSoftwareAgent:
         """
         Simulates MATLAB script runs, checking syntax and helper files.
         """
-        script_match = re.search(r'-batch\s+"([^"]+)"', command) or re.search(r'-r\s+"([^"]+)"', command)
+        script_match = (
+            re.search(r'-batch\s+"?([^"\s]+)"?', command) or 
+            re.search(r'-r\s+"?([^"\s]+)"?', command) or
+            re.search(r'\bmatlab\s+"?([^"-\s][^\s"]*)"?', command)
+        )
         if not script_match:
             return {
                 "exit_code": -2,

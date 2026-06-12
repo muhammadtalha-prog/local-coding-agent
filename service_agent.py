@@ -156,17 +156,17 @@ class CodingAgentService:
                     self._save_history()
                     continue
                     
-                # Check 2: Heartbeat timeout (120 seconds)
+                # Check 2: Heartbeat timeout (300 seconds)
                 last_heartbeat = TaskStatusRegistry.get_last_heartbeat(task_id)
                 if last_heartbeat == 0.0:
                     last_heartbeat = start_time
                     
                 time_since_heartbeat = now - last_heartbeat
-                if time_since_heartbeat > 120:
-                    print(f"⚠️ Watchdog: Task {task_id} heartbeat lost for {time_since_heartbeat:.1f}s (limit 120s). Cancelling.")
+                if time_since_heartbeat > 300:
+                    print(f"⚠️ Watchdog: Task {task_id} heartbeat lost for {time_since_heartbeat:.1f}s (limit 300s). Cancelling.")
                     self.cancel_task(task_id)
                     with self.lock:
-                        self.tasks_status[task_id]["errors"] = "Timeout: Heartbeat lost (no progress for 120 seconds)."
+                        self.tasks_status[task_id]["errors"] = "Timeout: Heartbeat lost (no progress for 300 seconds)."
                     self._save_history()
 
     def _worker_loop(self):
