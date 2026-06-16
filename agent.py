@@ -1,11 +1,13 @@
 from typing import TypedDict, List, Dict, Any
 import json
 import re
+import os
+import shutil
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, AIMessage, ToolMessage
 from langgraph.graph import StateGraph, END
 
-from config import get_llm, WORKSPACE_DIR
-from prompt import AGENT_SYSTEM_PROMPT, get_coder_prompt
+from config import get_llm, WORKSPACE_DIR, DEFAULT_COMMAND_TIMEOUT
+from prompt import RAW_CODE_SYSTEM_PROMPT, get_raw_coder_prompt
 from tools import (
     list_workspace_files,
     read_code_file,
@@ -35,6 +37,8 @@ def parse_ollama_tool_call(content: str) -> List[Dict[str, Any]]:
     Attempts to parse tool calls from raw response content when Ollama/model
     returns tool calls as JSON in text instead of populating tool_calls natively.
     Supports parsing multiple JSON objects representing separate tool calls.
+    Also falls back to robust text-based heuristic parsing to force Ollama to write files
+    and execute commands even if formatting is off.
     """
     if not content:
         return []
@@ -83,16 +87,16 @@ def parse_ollama_tool_call(content: str) -> List[Dict[str, Any]]:
         relative_path = path_match.group(1) if path_match else None
         
         content_match = re.search(r'"content"\s*:\s*"((?:[^"\\]|\\.)*)"', block_str, re.DOTALL)
-        content = None
+        content_val = None
         if content_match:
             raw_content = content_match.group(1)
-            content = raw_content.replace('\\n', '\n') \
-                                 .replace('\\t', '\t') \
-                                 .replace('\\"', '"') \
-                                 .replace("\\'", "'") \
-                                 .replace('\\/', '/') \
-                                 .replace('\\\\', '\\')
-                                 
+            content_val = raw_content.replace('\\n', '\n') \
+                                     .replace('\\t', '\t') \
+                                     .replace('\\"', '"') \
+                                     .replace("\\'", "'") \
+                                     .replace('\\/', '/') \
+                                     .replace('\\\\', '\\')
+                                     
         cmd_match = re.search(r'"command"\s*:\s*"((?:[^"\\]|\\.)*)"', block_str)
         command = None
         if cmd_match:
@@ -105,13 +109,23 @@ def parse_ollama_tool_call(content: str) -> List[Dict[str, Any]]:
         args = {}
         if relative_path is not None:
             args["relative_path"] = relative_path
-        if content is not None:
-            args["content"] = content
+        if content_val is not None:
+            args["content"] = content_val
         if command is not None:
             args["command"] = command
         if timeout is not None:
             args["timeout"] = timeout
         return {"name": name, "arguments": args}
+
+    def unescape_string(s: str) -> str:
+        return s.replace('\\n', '\n').replace('\\t', '\t').replace('\\"', '"').replace("\\'", "'").replace('\\\\', '\\')
+
+    def extract_markdown_code_block(text: str) -> str:
+        # Match ```language\n...\n``` or ```\n...\n``` with optional whitespace/newlines
+        code_block = re.search(r'```(?:\w+)?\s*\n([\s\S]+?)\s*```', text)
+        if code_block:
+            return code_block.group(1)
+        return ""
 
     # 1. Try parsing entire string as direct JSON (dictionary or list)
     try:
@@ -119,66 +133,163 @@ def parse_ollama_tool_call(content: str) -> List[Dict[str, Any]]:
         if isinstance(data, dict):
             call = extract_call(data)
             if call:
-                return [call]
+                calls.append(call)
         elif isinstance(data, list):
             for item in data:
                 call = extract_call(item)
                 if call:
                     calls.append(call)
-            if calls:
-                return calls
     except json.JSONDecodeError:
         pass
 
     # 2. Try extracting JSON from markdown code blocks
-    code_blocks = re.findall(r"```(?:json)?\s*([\s\S]+?)\s*```", content_str)
-    for block in code_blocks:
-        try:
-            data = json.loads(block.strip())
-            if isinstance(data, dict):
-                call = extract_call(data)
-                if call:
-                    calls.append(call)
-            elif isinstance(data, list):
-                for item in data:
-                    call = extract_call(item)
-                    if call:
-                        calls.append(call)
-        except json.JSONDecodeError:
-            data = parse_with_regex(block.strip())
-            if data:
-                call = extract_call(data)
-                if call:
-                    calls.append(call)
-
-    # 3. Fallback: Parse multiple balanced JSON blocks using bracket tracking
-    i = 0
-    while i < len(content_str):
-        if content_str[i] == '{':
-            bracket_count = 1
-            j = i + 1
-            while j < len(content_str) and bracket_count > 0:
-                if content_str[j] == '{':
-                    bracket_count += 1
-                elif content_str[j] == '}':
-                    bracket_count -= 1
-                j += 1
-            if bracket_count == 0:
-                block = content_str[i:j]
-                try:
-                    data = json.loads(block)
+    if not calls:
+        code_blocks = re.findall(r"```(?:json)?\s*([\s\S]+?)\s*```", content_str)
+        for block in code_blocks:
+            try:
+                data = json.loads(block.strip())
+                if isinstance(data, dict):
                     call = extract_call(data)
                     if call:
                         calls.append(call)
-                except json.JSONDecodeError:
-                    data = parse_with_regex(block)
-                    if data:
+                elif isinstance(data, list):
+                    for item in data:
+                        call = extract_call(item)
+                        if call:
+                            calls.append(call)
+            except json.JSONDecodeError:
+                data = parse_with_regex(block.strip())
+                if data:
+                    call = extract_call(data)
+                    if call:
+                        calls.append(call)
+
+    # 3. Fallback: Parse multiple balanced JSON blocks using bracket tracking
+    if not calls:
+        i = 0
+        while i < len(content_str):
+            if content_str[i] == '{':
+                bracket_count = 1
+                j = i + 1
+                while j < len(content_str) and bracket_count > 0:
+                    if content_str[j] == '{':
+                        bracket_count += 1
+                    elif content_str[j] == '}':
+                        bracket_count -= 1
+                    j += 1
+                if bracket_count == 0:
+                    block = content_str[i:j]
+                    try:
+                        data = json.loads(block)
                         call = extract_call(data)
                         if call:
                             calls.append(call)
-                i = j - 1
-        i += 1
+                    except json.JSONDecodeError:
+                        data = parse_with_regex(block)
+                        if data:
+                            call = extract_call(data)
+                            if call:
+                                calls.append(call)
+                    i = j - 1
+            i += 1
 
+    # 4. Post-processing/healing: Check if we got write_code_file_tool calls but content is missing or empty
+    for call in calls:
+        if call.get("name") == "write_code_file_tool":
+            args = call.setdefault("args", {})
+            if not args.get("content"):
+                code_content = extract_markdown_code_block(content)
+                if code_content:
+                    args["content"] = code_content
+
+    # 5. Greedy fallback using heuristics if no tool calls were successfully parsed
+    if not calls:
+        # Check for write_code_file_tool pattern
+        if "write_code_file_tool" in content or "write_code_file" in content:
+            # Try to extract relative_path
+            path_match = re.search(r'"relative_path":\s*"([^"]+)"', content)
+            if not path_match:
+                path_match = re.search(r'(?:"relative_path"|relative_path)\s*[:=]\s*["\']([^"\']+)["\']', content)
+            
+            if path_match:
+                rel_path = path_match.group(1)
+                code_content = ""
+                content_match = re.search(r'"content":\s*"((?:[^"\\]|\\.)*)"', content, re.DOTALL)
+                if content_match:
+                    code_content = unescape_string(content_match.group(1))
+                else:
+                    content_match = re.search(r'"content"\s*:\s*\'((?:[^\'\\]|\\.)*)\'', content, re.DOTALL)
+                    if content_match:
+                        code_content = unescape_string(content_match.group(1))
+                
+                # Also look for code in markdown blocks if not extracted yet
+                if not code_content:
+                    code_content = extract_markdown_code_block(content)
+                
+                calls.append({
+                    "name": "write_code_file_tool",
+                    "args": {"relative_path": rel_path, "content": code_content},
+                    "id": f"call_write_{rel_path.replace('/', '_').replace('.', '_')}",
+                    "type": "tool_call"
+                })
+
+        # Also look for execute_external_command_tool
+        if "execute_external_command_tool" in content or "execute_external_command" in content or "python" in content:
+            cmd_match = re.search(r'"command":\s*"([^"]+)"', content)
+            if not cmd_match:
+                cmd_match = re.search(r'(?:"command"|command)\s*[:=]\s*["\']([^"\']+)["\']', content)
+            
+            if cmd_match:
+                cmd = cmd_match.group(1)
+                calls.append({
+                    "name": "execute_external_command_tool",
+                    "args": {"command": cmd, "timeout": 30},
+                    "id": f"call_execute_{len(calls)}",
+                    "type": "tool_call"
+                })
+
+    # 6. Ultra-fallback: Parse markdown blocks directly if still no calls, looking for filenames in preceding text
+    if not calls:
+        # Split content into parts: text and code blocks
+        parts = re.split(r'(```[\s\S]*?```)', content)
+        for k in range(1, len(parts), 2):
+            block_with_backticks = parts[k]
+            text_before = parts[k-1] if k > 0 else ""
+            
+            # Extract language and block content
+            block_match = re.match(r'```(\w*)\s*\n([\s\S]*?)\s*```', block_with_backticks)
+            if block_match:
+                lang = block_match.group(1).lower()
+                code_content = block_match.group(2)
+                
+                # Check if it's a command shell block
+                if lang in ('bash', 'sh', 'shell', 'cmd', 'powershell', 'bat'):
+                    # Split command lines
+                    for line in code_content.splitlines():
+                        line_strip = line.strip()
+                        if line_strip and not line_strip.startswith('#'):
+                            calls.append({
+                                "name": "execute_external_command_tool",
+                                "args": {"command": line_strip, "timeout": 30},
+                                "id": f"call_execute_{len(calls)}",
+                                "type": "tool_call"
+                            })
+                else:
+                    # Look for a filename in text_before
+                    filenames = re.findall(r'`?(\b[a-zA-Z0-9_\-\/]+\.(?:py|js|ts|json|html|css|sh|bat|m|txt|md|yaml|yml)\b)`?', text_before)
+                    if filenames:
+                        # Use the last mentioned filename (closest to code block)
+                        rel_path = filenames[-1]
+                        calls.append({
+                            "name": "write_code_file_tool",
+                            "args": {"relative_path": rel_path, "content": code_content},
+                            "id": f"call_write_{rel_path.replace('/', '_').replace('.', '_')}",
+                            "type": "tool_call"
+                        })
+
+    # Ensure it always returns a list, never None
+    if not isinstance(calls, list):
+        calls = []
     return calls
 
 llm = get_llm()
@@ -217,12 +328,12 @@ def call_model_node(state: AgentState) -> Dict[str, Any]:
     # If starting, construct initial system prompt and workspace target instructions
     if not messages:
         messages = [
-            SystemMessage(content=AGENT_SYSTEM_PROMPT)
+            SystemMessage(content=RAW_CODE_SYSTEM_PROMPT)
         ]
         
         # Build first user message with project description and context
         current_files = list_workspace_files(workspace_dir=state.get("workspace_dir"))
-        init_prompt = get_coder_prompt(state["description"], current_files)
+        init_prompt = get_raw_coder_prompt(state["description"], current_files, state.get("test_command", ""))
         messages.append(HumanMessage(content=init_prompt))
     
     # If there are syntax or runtime execution errors from the last test iteration, inject them
@@ -234,6 +345,7 @@ Stack trace / Error details:
 {state['errors']}
 
 Review the files, locate the bugs, edit the files, and verify with your execution/testing tools again.
+Remember to output the corrected code for the necessary files using the `# FILE: filename` format.
 """
         messages.append(HumanMessage(content=error_context))
 
@@ -248,15 +360,67 @@ Review the files, locate the bugs, edit the files, and verify with your executio
     response = llm.invoke(active_messages)
     print(f"DEBUG: Model response content: {repr(response.content)}")
     
-    # Parse tool calls from the raw content manually since we do not bind tools
-    parsed_calls = parse_ollama_tool_call(response.content)
-    print(f"DEBUG: Model response tool calls (parsed): {parsed_calls}")
+    # 1. Parse "# FILE: filename" separators from the response
+    workspace_dir = state.get("workspace_dir")
+    written_files = []
+    
+    # Regex to find "# FILE: filename" and content
+    pattern = r'#+\s*[Ff][Ii][Ll][Ee]\s*:\s*([a-zA-Z0-9_\-\/\.]+)([\s\S]*?)(?=(?:#+\s*[Ff][Ii][Ll][Ee]\s*:)|$)'
+    matches = re.findall(pattern, response.content)
+    
+    has_requirements = False
+    for filename, file_content in matches:
+        filename = filename.strip()
+        # Clean up file content
+        code_block = re.search(r'```(?:\w+)?\s*\n([\s\S]+?)\s*```', file_content)
+        if code_block:
+            code = code_block.group(1).strip()
+        else:
+            code = file_content.strip()
+            if code.startswith('```python'):
+                code = code[9:].strip()
+            elif code.startswith('```'):
+                code = code[3:].strip()
+            if code.endswith('```'):
+                code = code[:-3].strip()
+        
+        # Write file to workspace_dir
+        if workspace_dir:
+            full_path = os.path.join(workspace_dir, filename)
+            # Create subdirectories if they don't exist
+            os.makedirs(os.path.dirname(full_path), exist_ok=True)
+            with open(full_path, "w", encoding="utf-8") as f:
+                f.write(code)
+            print(f"📝 Wrote file to workspace: {filename} ({len(code)} bytes)")
+            written_files.append(filename)
+            
+            if filename == "requirements.txt":
+                has_requirements = True
+                
+    # If requirements.txt was written, automatically install requirements
+    if has_requirements and workspace_dir:
+        print("📦 requirements.txt updated. Installing dependencies...")
+        try:
+            install_workspace_requirements(workspace_dir=workspace_dir)
+            print("✅ Dependencies installed successfully.")
+        except Exception as e:
+            print(f"❌ Error installing dependencies: {e}")
+
+    # 2. Fallback to standard parsing if no raw # FILE: blocks were written
+    parsed_calls = []
+    if not written_files:
+        parsed_calls = parse_ollama_tool_call(response.content)
+        if parsed_calls is None:
+            parsed_calls = []
+        print(f"DEBUG: Model response tool calls (parsed): {parsed_calls}")
+    else:
+        print(f"📝 Directly generated and saved {len(written_files)} files: {written_files}. Bypassing tool node routing.")
     
     ai_msg = AIMessage(
         content=response.content,
         additional_kwargs=response.additional_kwargs,
         response_metadata=response.response_metadata,
-        tool_calls=parsed_calls,
+        tool_calls=parsed_calls if parsed_calls is not None else [],
         id=response.id
     )
             
@@ -279,7 +443,7 @@ def execute_tools_node(state: AgentState) -> Dict[str, Any]:
     workspace_dir = state.get("workspace_dir")
     
     tool_messages = []
-    if last_message.tool_calls:
+    if hasattr(last_message, "tool_calls") and last_message.tool_calls:
         for tool_call in last_message.tool_calls:
             name = tool_call["name"]
             args = tool_call["args"] or {}
@@ -307,7 +471,7 @@ def execute_tools_node(state: AgentState) -> Dict[str, Any]:
                         auto_cmd_res = execute_external_command_tool(
                             cmd, 
                             workspace_dir=workspace_dir, 
-                            timeout=args.get("timeout", 60), 
+                            timeout=args.get("timeout", DEFAULT_COMMAND_TIMEOUT), 
                             task_id=task_id
                         )
 
@@ -356,6 +520,72 @@ def execute_tools_node(state: AgentState) -> Dict[str, Any]:
             
     return {"messages": messages + tool_messages}
 
+def detect_placeholders(code: str) -> List[str]:
+    placeholders = []
+    # Match comments containing todo, fixme, placeholder, or code here
+    comment_pattern = r'(?:#|//|/\*|%)\s*(?i:\b(?:todo|fixme|placeholder|insert\s+code|code\s+here|implement\s+here)\b)'
+    if re.search(comment_pattern, code):
+        placeholders.append("comment placeholder (e.g. TODO, placeholder, etc.)")
+    
+    # Match ellipsis (...) on a line by itself
+    if re.search(r'(?m)^\s*\.\.\.\s*$', code):
+        placeholders.append("Ellipsis (...) placeholder")
+        
+    return placeholders
+
+def heal_missing_files(workspace_dir: str, test_command: str):
+    if not test_command or not workspace_dir:
+        return
+    try:
+        # Find all potential python/matlab files in the test command
+        files_in_cmd = re.findall(r'\b([a-zA-Z0-9_\-\.]+)\.(py|m)\b', test_command)
+        py_files = [f"{name}.{ext}" for name, ext in files_in_cmd]
+        
+        # If the command has python -m unittest module, extract module name
+        unittest_modules = re.findall(r'-m\s+unittest\s+([a-zA-Z0-9_\-\.]+)\b', test_command)
+        for m in unittest_modules:
+            if not m.endswith('.py'):
+                py_files.append(m + '.py')
+                
+        # Check if any of these expected files are missing
+        if os.path.exists(workspace_dir):
+            for expected_file in py_files:
+                expected_path = os.path.join(workspace_dir, expected_file)
+                if not os.path.exists(expected_path):
+                    print(f"🔍 Healing: Expected file '{expected_file}' is missing in workspace.")
+                    # Look for written python/matlab files
+                    all_files = os.listdir(workspace_dir)
+                    
+                    # Check for candidates that are files and have matching extension
+                    candidates = []
+                    for f in all_files:
+                        full_f_path = os.path.join(workspace_dir, f)
+                        if os.path.isfile(full_f_path) and f.endswith(expected_file.split('.')[-1]) and f != expected_file:
+                            candidates.append(f)
+                    
+                    if candidates:
+                        # Find the best candidate based on name similarity and test matching
+                        is_expected_test = 'test' in expected_file.lower()
+                        
+                        def score_candidate(c):
+                            is_c_test = 'test' in c.lower()
+                            # Preference for matching test status
+                            test_match_bonus = 1.0 if is_expected_test == is_c_test else 0.0
+                            # Similarity ratio
+                            import difflib
+                            sim = difflib.SequenceMatcher(None, expected_file.lower(), c.lower()).ratio()
+                            return (test_match_bonus, sim)
+                        
+                        # Sort candidates descending by score
+                        candidates.sort(key=score_candidate, reverse=True)
+                        candidate = candidates[0]
+                        
+                        src_path = os.path.join(workspace_dir, candidate)
+                        shutil.copy2(src_path, expected_path)
+                        print(f"💡 Healing: Copied '{candidate}' to '{expected_file}' to satisfy verification command.")
+    except Exception as e:
+        print(f"⚠️ Error during healing: {e}")
+
 def execution_node(state: AgentState) -> Dict[str, Any]:
     """
     Generic execution node that executes commands in the designated workspace and language.
@@ -373,6 +603,9 @@ def execution_node(state: AgentState) -> Dict[str, Any]:
     test_command = state.get("test_command")
     language = state.get("language", "python")
     
+    # 1. Run the file healer before executing the test command
+    heal_missing_files(workspace_dir, test_command)
+    
     if not test_command:
         print("ℹ️ No test_command specified. Skipping execution checks.")
         return {"errors": ""}
@@ -389,7 +622,7 @@ def execution_node(state: AgentState) -> Dict[str, Any]:
     else:
         software_agent = ExternalSoftwareAgent()
         
-    res = software_agent.execute_command(test_command, workspace_dir, timeout=60, task_id=task_id)
+    res = software_agent.execute_command(test_command, workspace_dir, timeout=DEFAULT_COMMAND_TIMEOUT, task_id=task_id)
     
     errors_found = ""
     status = "PASSED" if res["exit_code"] == 0 else "FAILED"
@@ -402,10 +635,36 @@ def execution_node(state: AgentState) -> Dict[str, Any]:
     else:
         print(f"✅ Verification Passed!")
         
+    # Check for placeholders in files
+    placeholders_errors = []
+    if os.path.exists(workspace_dir):
+        for root, _, files in os.walk(workspace_dir):
+            if "venv" in root.split(os.sep) or ".git" in root.split(os.sep) or "__pycache__" in root.split(os.sep):
+                continue
+            for file in files:
+                if file.endswith(('.py', '.m', '.js', '.ts', '.java', '.c', '.cpp', '.h')):
+                    file_path = os.path.join(root, file)
+                    try:
+                        with open(file_path, 'r', encoding='utf-8') as f:
+                            content = f.read()
+                        placeholders = detect_placeholders(content)
+                        if placeholders:
+                            placeholders_errors.append(f"File '{file}' contains placeholders or TODOs: {', '.join(placeholders)}. You must write the complete code without placeholders.")
+                    except Exception:
+                        pass
+                        
+    if placeholders_errors:
+        placeholder_msg = "\n".join(placeholders_errors)
+        status = "FAILED"
+        if errors_found:
+            errors_found += "\n" + placeholder_msg
+        else:
+            errors_found = placeholder_msg
+            
     test_results = [{
         "command": test_command,
         "status": status,
-        "exit_code": res["exit_code"]
+        "exit_code": res["exit_code"] if not placeholders_errors else -3
     }]
     
     return {
@@ -417,7 +676,7 @@ def execution_node(state: AgentState) -> Dict[str, Any]:
 def router(state: AgentState) -> str:
     """Routes to tools if model calls tools, else checks compiler tests."""
     last_message = state["messages"][-1]
-    if last_message.tool_calls:
+    if hasattr(last_message, "tool_calls") and last_message.tool_calls:
         return "tools"
     return "tester"
 

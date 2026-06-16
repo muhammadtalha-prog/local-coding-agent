@@ -4,9 +4,11 @@ import threading
 import uuid
 import json
 import time
+import re
 from typing import Dict, Any, List
 from agent import graph
 from tools import list_workspace_files
+from external_software import TaskStatusRegistry
 
 class CodingAgentService:
     """
@@ -37,6 +39,14 @@ class CodingAgentService:
     def _save_history(self):
         with self.lock:
             try:
+                # Prune task history to prevent file from growing indefinitely
+                max_history = int(os.getenv("MAX_TASK_HISTORY", "100"))
+                if len(self.tasks_status) > max_history:
+                    # Sort tasks by creation timestamp (created_at) ascending
+                    sorted_tasks = sorted(self.tasks_status.items(), key=lambda x: x[1].get("created_at", 0))
+                    # Keep only the last max_history items
+                    self.tasks_status = dict(sorted_tasks[-max_history:])
+                
                 with open(self.history_file, 'w', encoding='utf-8') as f:
                     json.dump(self.tasks_status, f, indent=2)
             except Exception as e:
@@ -93,7 +103,9 @@ class CodingAgentService:
             "errors": "",
             "files": [],
             "created_at": time.time(),
-            "completed_at": None
+            "started_at": None,
+            "completed_at": None,
+            "workspace_dir": None
         }
         
         with self.lock:
@@ -115,7 +127,6 @@ class CodingAgentService:
         """
         Cancels a running or queued task, terminating active subprocesses.
         """
-        from external_software import TaskStatusRegistry
         TaskStatusRegistry.cancel(task_id)
         with self.lock:
             if task_id in self.tasks_status:
@@ -130,9 +141,8 @@ class CodingAgentService:
     def _watchdog_loop(self):
         """
         Monitors running tasks. Cancels tasks that run longer than 30 minutes
-        or fail to update their heartbeat for 120 seconds.
+        or fail to update their heartbeat for 600 seconds.
         """
-        from external_software import TaskStatusRegistry
         while self.running:
             time.sleep(5)
             now = time.time()
@@ -144,7 +154,7 @@ class CodingAgentService:
                         
             for task in running_tasks:
                 task_id = task["task_id"]
-                start_time = task.get("created_at") or now
+                start_time = task.get("started_at") or task.get("created_at") or now
                 
                 # Check 1: Elapsed time timeout (30 minutes = 1800 seconds)
                 elapsed = now - start_time
@@ -156,17 +166,17 @@ class CodingAgentService:
                     self._save_history()
                     continue
                     
-                # Check 2: Heartbeat timeout (300 seconds)
+                # Check 2: Heartbeat timeout (600 seconds)
                 last_heartbeat = TaskStatusRegistry.get_last_heartbeat(task_id)
                 if last_heartbeat == 0.0:
                     last_heartbeat = start_time
                     
                 time_since_heartbeat = now - last_heartbeat
-                if time_since_heartbeat > 300:
-                    print(f"⚠️ Watchdog: Task {task_id} heartbeat lost for {time_since_heartbeat:.1f}s (limit 300s). Cancelling.")
+                if time_since_heartbeat > 600:
+                    print(f"⚠️ Watchdog: Task {task_id} heartbeat lost for {time_since_heartbeat:.1f}s (limit 600s). Cancelling.")
                     self.cancel_task(task_id)
                     with self.lock:
-                        self.tasks_status[task_id]["errors"] = "Timeout: Heartbeat lost (no progress for 300 seconds)."
+                        self.tasks_status[task_id]["errors"] = "Timeout: Heartbeat lost (no progress for 600 seconds)."
                     self._save_history()
 
     def _worker_loop(self):
@@ -181,30 +191,47 @@ class CodingAgentService:
                 break
                 
             task_id = task_info["task_id"]
-            workspace_dir = os.path.abspath(os.path.join("workspace", f"task_{task_id}"))
-            os.makedirs(workspace_dir, exist_ok=True)
+            
+            with self.lock:
+                # Generate clean, human-readable directory name based on task description
+                words = re.findall(r'[a-zA-Z0-9]+', task_info["description"].lower())
+                stop_words = {
+                    "create", "build", "make", "write", "develop", "implement",
+                    "a", "an", "the", "of", "to", "for", "in", "with", "and", "by",
+                    "that", "this", "is", "it", "we", "want", "as"
+                }
+                filtered_words = [w for w in words if w not in stop_words]
+                if not filtered_words:
+                    filtered_words = [w for w in words if w not in {"a", "an", "the"}]
+                if not filtered_words:
+                    filtered_words = words if words else ["project"]
+                    
+                base_folder = "_".join(filtered_words)[:40].strip("_")
+                
+                # Handle duplicate names by adding a number suffix
+                folder_name = base_folder
+                counter = 2
+                os.makedirs("workspace", exist_ok=True)
+                while os.path.exists(os.path.join("workspace", folder_name)):
+                    suffix = f"_{counter}"
+                    max_len = 40 - len(suffix)
+                    folder_name = f"{base_folder[:max_len].strip('_')}{suffix}"
+                    counter += 1
+                    
+                workspace_dir = os.path.abspath(os.path.join("workspace", folder_name))
+                os.makedirs(workspace_dir, exist_ok=True)
             
             print(f"⚙️ Worker {threading.current_thread().name} picked Task {task_id}. Workspace: {workspace_dir}")
             
             with self.lock:
                 self.tasks_status[task_id]["status"] = "RUNNING"
+                self.tasks_status[task_id]["started_at"] = time.time()
+                self.tasks_status[task_id]["workspace_dir"] = workspace_dir
             self._save_history()
             
             try:
                 # Register initial heartbeat and setup cancellation state
-                from external_software import TaskStatusRegistry
                 TaskStatusRegistry.update_heartbeat(task_id)
-                
-                # Start a background heartbeat updater thread for the duration of graph.invoke
-                # to prevent watchdog timeouts during slow local LLM generations.
-                heartbeat_stop = threading.Event()
-                def worker_heartbeat():
-                    while not heartbeat_stop.is_set():
-                        TaskStatusRegistry.update_heartbeat(task_id)
-                        heartbeat_stop.wait(timeout=10)
-                
-                updater = threading.Thread(target=worker_heartbeat, name=f"WorkerHB-{task_id}", daemon=True)
-                updater.start()
                 
                 # Prepare initial state for the LangGraph agent
                 initial_state = {
@@ -221,13 +248,8 @@ class CodingAgentService:
                     "task_id": task_id
                 }
                 
-                try:
-                    # Invoke the LangGraph graph
-                    final_state = graph.invoke(initial_state)
-                finally:
-                    heartbeat_stop.set()
-                    # Wait briefly for the updater thread to join
-                    updater.join(timeout=1)
+                # Invoke the LangGraph graph
+                final_state = graph.invoke(initial_state)
                 
                 # Populate completion details
                 files = list_workspace_files(workspace_dir)
@@ -265,7 +287,8 @@ class CodingAgentService:
                     self.tasks_status[task_id]["status"] = "ERROR"
                     self.tasks_status[task_id]["errors"] = f"Runtime executor error: {str(e)}"
                     self.tasks_status[task_id]["completed_at"] = time.time()
+                    self.tasks_status[task_id]["workspace_dir"] = workspace_dir
             finally:
                 self.task_queue.task_done()
                 self._save_history()
-                print(f"🏁 Task {task_id} completed with status: {self.tasks_status[task_id]['status']}")
+                print(f"🏁 Task {task_id} completed with status: {self.tasks_status[task_id]['status']}. Project files are stored in: {workspace_dir}")

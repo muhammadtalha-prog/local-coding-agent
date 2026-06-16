@@ -1,23 +1,45 @@
 # Virtual Environment
 venv/
-.venv/
 env/
-
-# Python cache
-__pycache__/
-*.py[cod]
-*$py.class
-
-# Environment configurations
 .env
-.env.local
+*.pyc
+__pycache__/
+*.pyo
 
-# IDEs
+# IDE/Editor
 .vscode/
 .idea/
-.DS_Store
+*.swp
+*.swo
 
-# Workspace run data and backups
+# Workspace & Generated Files
 workspace/
+task_history.json
+batch_results.json
 backup.zip
-*.json
+scratch/
+*.log
+
+# OS Files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# API Keys (CRITICAL - NEVER UPLOAD)
+.env
+.env*
+.env.local.backup
+*.key
+*.pem
+
+# MATLAB Generated
+*.fig
+*.png
+*.jpg
+simulation_data.csv
+
+# Python
+*.egg-info/
+dist/
+build/
+*.whl

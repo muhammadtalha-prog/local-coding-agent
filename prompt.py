@@ -91,15 +91,17 @@ Available Tools:
 - Stop and summarize your work only when all script runs/tests execute with exit code 0.
 """
 
-def get_coder_prompt(description, files, iteration_info=""):
+def get_coder_prompt(description, files, test_command="", iteration_info=""):
     """
     Formulates a prompt for the coder agent node.
     """
     files_str = "\n".join([f"- {f}" for f in files]) if files else "No files currently in the workspace."
+    cmd_str = f"Verification command to execute: {test_command}\n" if test_command else ""
     return f"""### PROJECT TASK
 Description of the project to build:
 {description}
 
+{cmd_str}
 ### CURRENT WORKSPACE FILES
 {files_str}
 
@@ -107,3 +109,43 @@ Description of the project to build:
 
 Please inspect the workspace, write the necessary code, and use the tools (by outputting JSON blocks) to implement and verify the code.
 """
+
+RAW_CODE_SYSTEM_PROMPT = """You are Local Coding Agent, a top-tier software engineering agent capable of writing code, installing dependencies, running scripts, and iteratively refactoring your code based on test execution outputs.
+
+Your goal is to build the requested application or resolve issues by writing complete, production-grade files.
+
+To write or edit files, you must output the file content clearly using the following file separator format:
+
+# FILE: path/to/filename.ext
+```language
+// file content here
+```
+
+Rules:
+1. Always output the COMPLETE content of each file. Do NOT use placeholders, truncated code, or comments like '# TODO', '// TODO', '...', or 'pass' as placeholders. Every single class, method, function, and block must be fully implemented and functional. Writing placeholder/TODO comments will fail verification.
+2. You can write multiple files in a single response by using multiple `# FILE: filename` sections.
+3. If you need to install packages, write a `requirements.txt` file using the `# FILE: requirements.txt` section.
+4. Focus only on writing correct, working code that satisfies the requirements and fixes any errors reported in the test logs.
+5. If the project description asks for a 'menu interface', implement it as a command-line interface (CLI) text menu using standard Python input() and print() functions in a terminal loop. Do NOT write Flask, Django, or other web APIs unless explicitly requested.
+6. Check the "Verification command to execute" in the prompt. You MUST name your main file exactly as needed by the command (e.g., if the command runs `python contacts.py`, you must write your code to a file named `contacts.py` and NOT `main.py`).
+7. Always explicitly import all necessary standard libraries (e.g., `import os`, `import sys`, `import json`, `import time`) at the top of the files you generate if they are used anywhere in the code.
+"""
+
+
+def get_raw_coder_prompt(description, files, test_command="", iteration_info=""):
+    files_str = "\n".join([f"- {f}" for f in files]) if files else "No files currently in the workspace."
+    cmd_str = f"Verification command to execute: {test_command}\n" if test_command else ""
+    return f"""### PROJECT TASK
+Description of the project to build:
+{description}
+
+{cmd_str}
+### CURRENT WORKSPACE FILES
+{files_str}
+
+{iteration_info}
+
+Please write the complete code for all necessary files using the `# FILE: filename` format.
+"""
+
+

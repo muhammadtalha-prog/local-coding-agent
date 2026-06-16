@@ -1,7 +1,34 @@
 import os
 import subprocess
 import sys
-from config import WORKSPACE_DIR
+from config import WORKSPACE_DIR, DEFAULT_COMMAND_TIMEOUT
+
+def get_short_path_name(long_name):
+    """
+    Gets the short path name of a given long path on Windows.
+    Returns the original path if the path does not exist, or if we are not on Windows.
+    """
+    if os.name != 'nt':
+        return long_name
+    try:
+        import ctypes
+        from ctypes import wintypes
+        _GetShortPathNameW = ctypes.windll.kernel32.GetShortPathNameW
+        _GetShortPathNameW.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+        _GetShortPathNameW.restype = wintypes.DWORD
+
+        output_buf_size = 0
+        while True:
+            output_buf = ctypes.create_unicode_buffer(output_buf_size)
+            needed = _GetShortPathNameW(long_name, output_buf, output_buf_size)
+            if needed == 0:
+                return long_name
+            if output_buf_size >= needed:
+                return output_buf.value
+            else:
+                output_buf_size = needed
+    except Exception:
+        return long_name
 
 def get_venv_path(workspace_dir=None):
     """
@@ -20,11 +47,13 @@ def get_venv_path(workspace_dir=None):
     # 1. Reuse the root virtual environment if no custom local requirements are specified
     if not need_isolated:
         project_root = os.path.abspath(os.path.dirname(__file__))
-        root_venv_dir = os.path.join(project_root, "venv")
         if os.name == 'nt': # Windows
+            project_root = get_short_path_name(project_root)
+            root_venv_dir = os.path.join(project_root, "venv")
             root_python_exe = os.path.join(root_venv_dir, "Scripts", "python.exe")
             root_pip_exe = os.path.join(root_venv_dir, "Scripts", "pip.exe")
         else: # Unix/Mac
+            root_venv_dir = os.path.join(project_root, "venv")
             root_python_exe = os.path.join(root_venv_dir, "bin", "python")
             root_pip_exe = os.path.join(root_venv_dir, "bin", "pip")
 
@@ -34,6 +63,9 @@ def get_venv_path(workspace_dir=None):
     # 2. Fallback to local workspace-isolated venv creation
     if workspace_dir is None:
         workspace_dir = WORKSPACE_DIR
+        
+    if os.name == 'nt':
+        workspace_dir = get_short_path_name(os.path.abspath(workspace_dir))
         
     venv_dir = os.path.join(workspace_dir, "venv")
     
@@ -52,6 +84,7 @@ def get_venv_path(workspace_dir=None):
             if os.path.exists(venv_dir):
                 import shutil
                 shutil.rmtree(venv_dir, ignore_errors=True)
+            os.makedirs(os.path.dirname(venv_dir), exist_ok=True)
             subprocess.run([sys.executable, "-m", "venv", venv_dir], check=True)
             print("✅ Isolated virtual environment created successfully.")
         except Exception as e:
@@ -133,7 +166,7 @@ def install_workspace_requirements(workspace_dir=None):
     except subprocess.CalledProcessError as e:
         return f"Error installing dependencies:\nStdout: {e.stdout}\nStderr: {e.stderr}"
 
-def execute_external_command_tool(command: str, workspace_dir: str = None, timeout: int = 60, task_id: str = None) -> str:
+def execute_external_command_tool(command: str, workspace_dir: str = None, timeout: int = DEFAULT_COMMAND_TIMEOUT, task_id: str = None) -> str:
     """
     Executes a shell command inside the specified workspace directory.
     """
@@ -158,7 +191,7 @@ def test_python_file(relative_path, workspace_dir=None, task_id=None):
     
     from external_software import ExternalSoftwareAgent
     agent = ExternalSoftwareAgent()
-    res = agent.execute_command(command, workspace_dir, timeout=60, task_id=task_id)
+    res = agent.execute_command(command, workspace_dir, timeout=DEFAULT_COMMAND_TIMEOUT, task_id=task_id)
     
     status = "PASSED" if res["exit_code"] == 0 else "FAILED"
     if res["exit_code"] == -1:
