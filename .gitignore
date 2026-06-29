@@ -44,3 +44,7 @@ simulation_data.csv
 dist/
 build/
 *.whl
+
+# Temporary Agent Files
+.memory/
+sandbox/

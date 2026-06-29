@@ -1,26 +1,32 @@
-# 🤖 Local Coding Agent
+# 🤖 Local Coding Agent - Secure Avionics Multi-Agent System
 
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://python.org)
-[![LangChain](https://img.shields.io/badge/LangChain-0.2+-green.svg)](https://langchain.com)
+[![vLLM](https://img.shields.io/badge/vLLM-Local%20Inference-orange.svg)](https://github.com/vllm-project/vllm)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-## 🚀 Overview
+An autonomous multi-agent developer assistant designed for secure local environments. The system plans, generates, lints, tests, and self-corrects code inside an isolated Virtual Machine (venv) sandbox, running entirely offline using **vLLM**.
 
-**Local Coding Agent** is an AI-powered autonomous developer assistant that generates, tests, and self-corrects Python and MATLAB code based on natural language descriptions. Built with LangChain and LangGraph, it runs entirely locally with Ollama or integrates with cloud providers like Groq and DeepSeek.
+---
 
-### ✨ Key Features
+## ⚡ Key Features
 
-- 🤖 **AI-Powered Code Generation** - Natural language to Python/MATLAB code
-- 🔄 **Self-Correction Loop** - Automatically fixes bugs from error logs
-- ⚡ **Parallel Processing** - Run multiple tasks simultaneously
-- 📁 **Human-Readable Output** - Clean folder names based on task descriptions
-- 🧪 **MATLAB Integration** - Full support with mock executor for testing
-- 🔌 **Multi-Provider Support** - Ollama, Groq, DeepSeek, Grok
-- 📊 **Batch Processing** - JSON-based task queue
+- 🖥️ **100% Local Inference & Execution** - Complete removal of external APIs (Gemini, Groq) to ensure security and zero cloud data leaks.
+- ⚙️ **vLLM Integration** - High-performance local LLM execution via OpenAI-compatible API servers.
+- 🛡️ **VM Sandbox Isolation** - Executes generated code and tests inside an isolated `venv` virtual machine workspace to protect the host device from unintended file modifications.
+- 📉 **Lag & Hang Prevention** - Strict resource constraints and child process tree cleanup (`taskkill` on Windows) prevent infinite loops or compile hangs from lagging your PC.
+- 🧩 **Specialized Agent Pipeline**:
+  - **Planning Agent**: Designs system architecture and safety contracts.
+  - **Coding Agent**: Translates plans into typed, production-ready code.
+  - **Testing Agent**: Writes comprehensive `pytest` suites.
+  - **Debugger Agent**: Corrects failures dynamically based on VM error trace logs.
+  - **Review Agent**: Performs DO-178C avionics safety/compliance audits.
+  - **Deploy Agent**: Rewrites code into user-interactive CLI prompts.
 
-## 📋 Quick Start
+---
 
-### Installation
+## 📋 Getting Started
+
+### 1. Installation
 
 ```bash
 # Clone the repository
@@ -29,57 +35,66 @@ cd local-coding-agent
 
 # Create virtual environment
 python -m venv venv
-source venv/bin/activate  # On Windows: .\venv\Scripts\activate
+.\venv\Scripts\activate  # Linux/Mac: source venv/bin/activate
 
 # Install dependencies
 pip install -r requirements.txt
-
-# Configure environment
-cp .env.template .env
-# Edit .env with your preferred provider
 ```
 
-### Usage
+### 2. Configure Environment
 
+Copy `.env.template` to `.env` and set up the local vLLM settings:
 ```bash
-# Python code generation
-python main.py "Create a Python script that processes CSV files" --test-cmd "python processor.py" --language python
-
-# MATLAB code generation
-python main.py "Create a MATLAB script for FFT analysis" --test-cmd "matlab -batch fft_analysis" --language matlab
-
-# Batch processing
-python main.py --batch tasks.json --concurrency 3
+copy .env.template .env
+```
+Ensure your `.env` contains:
+```ini
+LLM_PROVIDER=vllm
+VLLM_API_BASE=http://localhost:8000/v1
+VLLM_MODEL=Qwen/Qwen2.5-Coder-7B-Instruct
 ```
 
-## 📁 Project Structure
+### 3. Start local vLLM Server
 
-```text
-local-coding-agent/
-├── agent.py              # LangGraph agent implementation
-├── config.py             # Configuration & API management
-├── external_software.py  # MATLAB/Python execution engine
-├── main.py               # CLI launcher
-├── prompt.py             # System prompts for AI
-├── service_agent.py      # Parallel task service
-├── tools.py              # File & command execution tools
-├── workspace/            # Generated project folders
-├── .env.template         # Environment configuration template
-├── requirements.txt      # Python dependencies
-└── README.md             # This file
+Run the startup helper script to launch the local OpenAI-compatible endpoint:
+```bash
+# On Windows
+start_vllm.bat
+```
+Or start manually via CLI:
+```bash
+python -m vllm.entrypoints.openai.api_server --model Qwen/Qwen2.5-Coder-7B-Instruct --host 127.0.0.1 --port 8000
 ```
 
-## 🔧 Requirements
+### 4. Run the Agent
 
-- Python 3.10+
-- Ollama (optional, for local inference)
-- MATLAB (optional, for MATLAB code execution)
-- Git
+Run the main agent CLI:
+```bash
+python cli.py -d "Create a rental property ticket management system with user authentication, ticket creation, assignment, and reporting. Include safety contracts for input validation and data integrity."
+```
 
-## 📄 License
+---
 
-MIT License - see [LICENSE](file:///e:/Local%20coding%20agent/LICENSE) file for details
+## ⚠️ Important Notes
 
-## 🤝 Contributing
+* **GPU Memory**: Ensure you have enough dedicated GPU memory for local model inference (e.g. ~8-10GB VRAM for Qwen2.5-Coder 7B).
+* **vLLM Must Be Running**: The CLI validates that the local vLLM endpoint is active before initiating the coordinator.
+* **VM Isolation**: All code checking (Ruff, Mypy) and execution checks (Pytest, python running) happen isolated inside `vm_sandbox/work/sandbox/` to prevent modifications to the parent workspace.
+* **Windows Paths**: The system implements proper Windows path handling throughout commands and directory setups.
 
-Contributions are welcome! Please read CONTRIBUTING.md for details.
+---
+
+## 📁 Project Architecture
+
+* `cli.py` - Core entry point; performs startup validations.
+* `head.py` - Main orchestrator managing the multi-agent execution pipeline.
+* `vm_manager.py` - Initializes and manages the virtual environment VM execution sandbox.
+* `llm.py` - Communicates with the local vLLM model.
+* `settings.py` - Safety parameters, system prompts, and folder configurations.
+* `coder.py` - Specialized code-generation agent.
+* `tester.py` - Specialized unit test suite generator.
+* `debugger.py` - Specialized self-correction agent.
+* `linter.py` - Runs Ruff and Mypy inside the sandbox.
+* `executor.py` - Runs test suites and programs inside the sandbox.
+* `review.py` - Safety reviewer and auditor.
+* `deploy.py` - Prepares verified code for interactive user deployment.

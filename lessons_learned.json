@@ -1,0 +1,10 @@
+[
+    {
+        "mistake": "Class name and filename did not match",
+        "correction": "Ensure the MATLAB file name matches the function name, as MATLAB requires the file name to be the same as the function name"
+    },
+    {
+        "mistake": "Class name and filename mismatch",
+        "correction": "Ensure the MATLAB file name matches the function name to avoid compilation errors"
+    }
+]
