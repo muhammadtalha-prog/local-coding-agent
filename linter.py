@@ -107,7 +107,12 @@ class LinterAgent:
     async def _lint_matlab(self, filepath: Path) -> Tuple[bool, str]:
         import asyncio
         logger.info("Checking for MATLAB lint tools...")
-        cmd = ["matlab", "-batch", f"mlint('{str(filepath)}')"]
+        from settings import get_matlab_exe_or_none
+        matlab_exe = get_matlab_exe_or_none()
+        if matlab_exe is None:
+            self.memory.log_event("LinterAgent", "MATLAB command not found or not in PATH. Skipping mlint checks.")
+            return True, "MATLAB static analysis skipped: MATLAB command not found in local system PATH."
+        cmd = [matlab_exe, "-batch", f"mlint('{str(filepath)}')"]
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,

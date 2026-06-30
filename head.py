@@ -65,7 +65,12 @@ class HeadCoordinator:
             language = str(plan.get("language", language)).lower()
             source_code = self.memory.state.get("source_code", "")
             test_code = self.memory.state.get("test_code", "")
-            tests_generated = bool(test_code)
+            # If we crashed during a debugging loop, the test suite may be stale relative
+            # to a debugger-patched source file. Force validation/regeneration.
+            if self.memory.state.get("loop_count", 0) > 0:
+                tests_generated = False
+            else:
+                tests_generated = bool(test_code)
             if "loop_count" not in self.memory.state:
                 self.memory.update_state("loop_count", 0)
         else:
@@ -389,7 +394,8 @@ class HeadCoordinator:
                         f"Return ONLY the raw JSON object. Do not include markdown backticks or any other text."
                     )
                     from llm import async_query_llm
-                    raw_lesson = await async_query_llm(prompt, system_instruction="You are a senior safety compiler engineer. Summarize lessons learned in raw JSON format.")
+                    from settings import REVIEW_MODEL
+                    raw_lesson = await async_query_llm(prompt, system_instruction="You are a senior safety compiler engineer. Summarize lessons learned in raw JSON format.", model_name=REVIEW_MODEL)
                     
                     import json
                     clean_lesson = raw_lesson.strip()
