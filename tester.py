@@ -1,7 +1,7 @@
 import re
 from llm import async_query_llm
 from memory import MemoryAgent
-from settings import TESTER_PROMPT, get_agent_filenames
+from settings import TESTER_PROMPT, get_agent_filenames, TESTER_MODEL
 
 class TesterAgent:
     """Specialized for test generation only - does NOT handle debugging."""
@@ -24,7 +24,7 @@ class TesterAgent:
         )
         
         try:
-            raw_response = await async_query_llm(prompt, system_instruction=TESTER_PROMPT)
+            raw_response = await async_query_llm(prompt, system_instruction=TESTER_PROMPT, model_name=TESTER_MODEL)
             test_code = self._extract_code(raw_response)
             
             self.memory.update_state("test_code", test_code)

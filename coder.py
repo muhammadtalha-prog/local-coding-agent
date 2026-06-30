@@ -1,7 +1,7 @@
 import re
 from llm import async_query_llm
 from memory import MemoryAgent
-from settings import CODER_PROMPT, get_agent_filenames
+from settings import CODER_PROMPT, get_agent_filenames, CODER_MODEL
 
 class CoderAgent:
     """Specialized for code generation only - does NOT handle debugging."""
@@ -24,16 +24,35 @@ class CoderAgent:
                 lessons_context += f"{idx}. {lesson.get('mistake')}\n   Fix: {lesson.get('correction')}\n"
             lessons_context += "\n"
             
+        # Detect if the plan describes a class-based design
+        plan_components = plan_json.get("components", [])
+        plan_arch = str(plan_json.get("architecture_overview", "")).lower()
+        is_class_based = (
+            "class" in plan_arch
+            or any("class" in str(c).lower() for c in plan_components)
+        )
+
+        if is_class_based:
+            code_instruction = (
+                f"Generate the complete implementation as a Python CLASS. "
+                f"The class name should match the design (e.g., derived from '{filename_raw}'). "
+                f"ALL methods must be defined INSIDE the class body with proper indentation and 'self' parameter."
+            )
+        else:
+            code_instruction = (
+                f"Generate the complete implementation code. "
+                f"Ensure the main function is named '{filename_raw}'."
+            )
+        
         prompt = (
             f"{lessons_context}Requirements:\n{description}\n\n"
             f"System Plan:\n{plan_json}\n\n"
             f"Target Filename:\n{filename}\n\n"
-            f"Generate the complete implementation code. "
-            f"Ensure the main function is named '{filename_raw}'."
+            f"{code_instruction}"
         )
-        
+
         try:
-            raw_response = await async_query_llm(prompt, system_instruction=CODER_PROMPT)
+            raw_response = await async_query_llm(prompt, system_instruction=CODER_PROMPT, model_name=CODER_MODEL)
             code = self._extract_code(raw_response)
             
             self.memory.update_state("source_code", code)

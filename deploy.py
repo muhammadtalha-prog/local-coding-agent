@@ -1,6 +1,7 @@
 import re
 from llm import async_query_llm
 from memory import MemoryAgent
+from settings import DEPLOY_MODEL
 
 
 DEPLOY_PROMPT = """You are the Deployment Agent. Your task is to rewrite a verified safety-critical function to make it interactive for real-time users, while preserving its core logic, safety contracts, and parameter signatures.
@@ -59,7 +60,7 @@ class DeployAgent:
         )
         
         try:
-            raw_response = await async_query_llm(prompt, system_instruction=DEPLOY_PROMPT)
+            raw_response = await async_query_llm(prompt, system_instruction=DEPLOY_PROMPT, model_name=DEPLOY_MODEL)
             interactive_code = self._extract_code(raw_response)
             self.memory.log_event("DeployAgent", "Interactive deployment code successfully generated.")
             return interactive_code

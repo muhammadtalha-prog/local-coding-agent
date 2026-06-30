@@ -93,11 +93,25 @@ def main(description: str, session: str, timeout: float, max_loops: int, languag
             error_console.print("[bold red]ERROR: HuggingFace API token is not configured![/bold red]")
             error_console.print("Please add HF_API_TOKEN=your_token to your .env file.")
             sys.exit(1)
+    elif primary == "vllm":
+        import requests
+        console.print(f"[yellow]Validating primary LLM provider (vLLM) at {settings.VLLM_API_BASE}...[/yellow]")
+        try:
+            # Check models list to verify vLLM is active
+            res = requests.get(f"{settings.VLLM_API_BASE}/models", timeout=3)
+            if res.status_code != 200:
+                error_console.print(f"[bold red]ERROR: local vLLM server returned unexpected status code {res.status_code}[/bold red]")
+                sys.exit(1)
+        except Exception as e:
+            error_console.print(f"[bold red]ERROR: Local vLLM server is not active or unreachable at {settings.VLLM_API_BASE}[/bold red]")
+            error_console.print("Please ensure your local vLLM server is running (e.g. by running start_vllm.bat) before starting the agent.")
+            error_console.print(f"Details: {e}")
+            sys.exit(1)
 
 
 
-    # Validate Python dev tools availability (ruff, mypy, pytest) in virtual environment
-    if not settings.DOCKER_ENABLED:
+    # Validate Python dev tools (ruff, mypy, pytest) — only needed for Python targets
+    if language.lower() == "python" and not settings.DOCKER_ENABLED:
         python_exe = settings.get_python_exe()
         missing_tools = []
         import subprocess
@@ -130,8 +144,14 @@ def main(description: str, session: str, timeout: float, max_loops: int, languag
 
     try:
         coordinator = HeadCoordinator(session_id=session)
-        # Execute the orchestrator asynchronously
-        success, report = asyncio.run(coordinator.orchestrate(description, language=language))
+        # Execute the orchestrator asynchronously.
+        # Global pipeline timeout is owned by TimerAgent (settings.PIPELINE_TIMEOUT_SEC).
+        success, report = asyncio.run(
+            asyncio.wait_for(
+                coordinator.orchestrate(description, language=language),
+                timeout=settings.PIPELINE_TIMEOUT_SEC
+            )
+        )
         
         if success:
             console.print(Panel(
@@ -148,6 +168,9 @@ def main(description: str, session: str, timeout: float, max_loops: int, languag
             ))
             sys.exit(1)
             
+    except asyncio.TimeoutError:
+        error_console.print(f"\n[bold red]Pipeline exceeded {settings.PIPELINE_TIMEOUT_SEC}s global timeout. Session state saved — rerun with the same --session to resume.[/bold red]")
+        sys.exit(3)
     except Exception as e:
         error_console.print(f"[bold red]Fatal system error occurred:[/bold red] {e}")
         import traceback

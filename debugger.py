@@ -1,7 +1,7 @@
 import re
 from llm import async_query_llm
 from memory import MemoryAgent
-from settings import DEBUGGER_PROMPT, get_agent_filenames
+from settings import DEBUGGER_PROMPT, get_agent_filenames, DEBUGGER_MODEL
 
 class DebuggerAgent:
     """Specialized for debugging and fixing code."""
@@ -32,7 +32,7 @@ class DebuggerAgent:
         )
         
         try:
-            raw_response = await async_query_llm(prompt, system_instruction=DEBUGGER_PROMPT)
+            raw_response = await async_query_llm(prompt, system_instruction=DEBUGGER_PROMPT, model_name=DEBUGGER_MODEL)
             fixed_code = self._extract_code(raw_response)
             
             loop_count = self.memory.state.get("loop_count", 0) + 1
@@ -54,6 +54,13 @@ class DebuggerAgent:
                 if os.path.basename(filename).startswith("test_"):
                     target_is_test = True
                 self.memory.log_event("DebuggerAgent", f"Detected file override target in LLM response: {filepath_line}")
+            else:
+                # Fallback heuristic: if the fixed code closely resembles the test file's
+                # imports/assert structure rather than the source's function defs, guess test.
+                test_signal = fixed_code.count("assert") + fixed_code.count("def test_") + fixed_code.count("import pytest")
+                source_signal = fixed_code.count("def ") - fixed_code.count("def test_")
+                target_is_test = test_signal > source_signal and test_signal > 0
+                self.memory.log_event("DebuggerAgent", f"No filepath marker found; heuristic guessed {'test' if target_is_test else 'source'} file (test_signal={test_signal}, source_signal={source_signal}).")
             
             if target_is_test:
                 self.memory.update_state("test_code", fixed_code)

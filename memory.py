@@ -65,10 +65,19 @@ class MemoryAgent:
     def _sanitize_matlab_content(self, filename: str, content: str) -> str:
         """
         Sanitize MATLAB file content:
-        1. Replace common Unicode characters with ASCII equivalents.
-        2. Detect if the LLM accidentally generated Python instead of MATLAB
+        1. Decompose Unicode accents/Greek math chars and replace common entities.
+        2. Strip Byte Order Marks (BOM) and non-ASCII characters completely.
+        3. Detect if the LLM accidentally generated Python instead of MATLAB
            and replace with a minimal stub that will force the debugger to regenerate.
         """
+        import unicodedata
+        
+        # Explicit BOM strip (UTF-8 BOM is common when writing files from certain OS/models)
+        content = content.lstrip("\ufeff")
+
+        # Decompose accented/math chars before stripping (decomposes e.g. e with accent to e + accent)
+        content = unicodedata.normalize("NFKD", content)
+
         # --- Step 1: Unicode character replacement ---
         replacements = {
             "\u2018": "'",  # left single quotation mark
@@ -84,12 +93,35 @@ class MemoryAgent:
             "\u03b1": "alpha",  # greek alpha
             "\u03b2": "beta",   # greek beta
             "\u03c9": "omega",  # greek omega
+            "\u03c0": "pi",     # greek pi
         }
         for unicode_char, ascii_char in replacements.items():
             content = content.replace(unicode_char, ascii_char)
 
         # Strip any remaining non-ASCII characters
+        before_strip = content
         content = content.encode("ascii", errors="ignore").decode("ascii")
+
+        if before_strip != content:
+            stripped_chars = set(before_strip) - set(content)
+            logger.warning(f"[MemoryAgent] Stripped non-ASCII chars from {filename}: {[hex(ord(c)) for c in stripped_chars]}")
+
+        # Convert Python-style comment lines or inline comments starting with '#' to MATLAB '%'
+        # while preserving '#' characters inside single-quoted strings.
+        lines = content.splitlines()
+        for idx, line in enumerate(lines):
+            if "#" in line:
+                new_chars = []
+                in_quote = False
+                for char in line:
+                    if char == "'":
+                        in_quote = not in_quote
+                    if char == "#" and not in_quote:
+                        new_chars.append("%")
+                    else:
+                        new_chars.append(char)
+                lines[idx] = "".join(new_chars)
+        content = "\n".join(lines)
 
         # --- Step 2: Detect Python-in-MATLAB mismatch ---
         # If the LLM generated Python syntax, replace with an error stub

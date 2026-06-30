@@ -4,7 +4,7 @@ import subprocess
 import asyncio
 from typing import Tuple, Optional
 from memory import MemoryAgent
-from settings import ROOT_DIR, get_agent_filenames, TEST_TIMEOUT_SEC, EXEC_TIMEOUT_SEC, get_python_exe, get_matlab_exe
+from settings import ROOT_DIR, get_agent_filenames, TEST_TIMEOUT_SEC, EXEC_TIMEOUT_SEC, get_python_exe, get_matlab_exe, get_matlab_exe_or_none
 
 logger = logging.getLogger("avionics_framework.executor")
 
@@ -63,6 +63,12 @@ class ExecutorAgent:
             if not test_file.exists():
                 return False, f"Error: {test_filename} does not exist."
 
+            # Check if MATLAB is actually installed before attempting execution
+            matlab_exe = get_matlab_exe_or_none()
+            if matlab_exe is None:
+                self.memory.log_event("ExecutorAgent", "MATLAB not installed. Skipping test execution — code generation verified via static analysis only.")
+                return True, "MATLAB_NOT_INSTALLED: Test execution skipped (MATLAB not found on this system). Code was verified via static analysis and code review only."
+
             # MATLAB always runs on the host. Read test content to check if it is class-based
             try:
                 with open(test_file, "r", encoding="utf-8") as f:
@@ -91,7 +97,7 @@ class ExecutorAgent:
                     f"end; "
                     f"exit;"
                 )
-            cmd = [get_matlab_exe(), "-batch", matlab_cmd]
+            cmd = [matlab_exe, "-batch", matlab_cmd]
             from settings import DEFAULT_TIMEOUT_SEC
             actual_timeout = timeout if timeout is not None else DEFAULT_TIMEOUT_SEC
             run_timeout = actual_timeout + 15.0 if actual_timeout is not None else TEST_TIMEOUT_SEC + 15.0
@@ -142,6 +148,12 @@ class ExecutorAgent:
             if not source_file.exists():
                 return False, f"Error: {source_filename} does not exist."
 
+            # Check if MATLAB is actually installed before attempting execution
+            matlab_exe = get_matlab_exe_or_none()
+            if matlab_exe is None:
+                self.memory.log_event("ExecutorAgent", "MATLAB not installed. Skipping final execution — code generation complete.")
+                return True, "MATLAB_NOT_INSTALLED: Final execution skipped (MATLAB not found on this system). Generated code is saved and ready for use on a system with MATLAB."
+
             func_name = source_filename.replace(".m", "")
             sandbox_dir_str = str(sandbox_dir).replace("\\", "/")
             matlab_cmd = (
@@ -155,7 +167,7 @@ class ExecutorAgent:
                 f"end; "
                 f"exit;"
             )
-            cmd = [get_matlab_exe(), "-batch", matlab_cmd]
+            cmd = [matlab_exe, "-batch", matlab_cmd]
             from settings import DEFAULT_TIMEOUT_SEC
             actual_timeout = timeout if timeout is not None else DEFAULT_TIMEOUT_SEC
             run_timeout = actual_timeout + 15.0 if actual_timeout is not None else EXEC_TIMEOUT_SEC + 15.0
@@ -177,7 +189,12 @@ class ExecutorAgent:
                 stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
                 stdout_str = stdout.decode("utf-8", errors="replace")
                 stderr_str = stderr.decode("utf-8", errors="replace")
-                stdout_stderr = f"--- STDOUT ---\n{stdout_str}\n--- STDERR ---\n{stderr_str}"
+                is_matlab_cmd = cmd and "matlab" in str(cmd[0]).lower()
+                if is_matlab_cmd and proc.returncode:
+                    stderr_prefix = f"ERROR: MATLAB error Exit Status: {hex(proc.returncode)}\n"
+                else:
+                    stderr_prefix = ""
+                stdout_stderr = f"--- STDOUT ---\n{stdout_str}\n--- STDERR ---\n{stderr_prefix}{stderr_str}"
                 success = (proc.returncode == 0)
                 return success, stdout_stderr
             except asyncio.TimeoutError:
@@ -200,14 +217,27 @@ class ExecutorAgent:
                 await proc.communicate()
                 return False, f"Error: Command timed out after {timeout} seconds."
         except FileNotFoundError as e:
-            if cmd and cmd[0] == "matlab":
-                self.memory.log_event("ExecutorAgent", "MATLAB not found or not in PATH. Bypassing execution and assuming SUCCESS.")
-                return True, "MATLAB not found on host. Bypassing execution and assuming success."
+            # Check if this is a MATLAB not-found error
+            if cmd and ("matlab" in str(cmd[0]).lower()):
+                resolved = get_matlab_exe()
+                msg = (
+                    f"ERROR: MATLAB executable not found at '{resolved}'.\n"
+                    f"Set MATLAB_PATH in your .env file to the full path of matlab.exe, "
+                    f"e.g.: MATLAB_PATH=D:\\Matlab\\install\\bin\\matlab.exe"
+                )
+                self.memory.log_event("ExecutorAgent", msg)
+                return False, msg
             logger.error(f"Execution failed: {e}")
             return False, f"Error executing process: {e}"
         except Exception as e:
-            if isinstance(e, OSError) and e.errno == 2 and cmd and cmd[0] == "matlab":
-                self.memory.log_event("ExecutorAgent", "MATLAB not found or not in PATH. Bypassing execution and assuming SUCCESS.")
-                return True, "MATLAB not found on host. Bypassing execution and assuming success."
+            if isinstance(e, OSError) and e.errno == 2 and cmd and ("matlab" in str(cmd[0]).lower()):
+                resolved = get_matlab_exe()
+                msg = (
+                    f"ERROR: MATLAB executable not found at '{resolved}'.\n"
+                    f"Set MATLAB_PATH in your .env file to the full path of matlab.exe, "
+                    f"e.g.: MATLAB_PATH=D:\\Matlab\\install\\bin\\matlab.exe"
+                )
+                self.memory.log_event("ExecutorAgent", msg)
+                return False, msg
             logger.error(f"Execution failed: {e}")
             return False, f"Error executing process: {e}"

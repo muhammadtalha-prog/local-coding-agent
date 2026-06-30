@@ -1,28 +1,69 @@
 import logging
+import time
 from typing import Tuple, List
 from memory import MemoryAgent
 import settings
 
 logger = logging.getLogger("avionics_framework.timer")
 
+
 class TimerAgent:
     def __init__(self, memory_agent: MemoryAgent):
         self.memory = memory_agent
+        self._pipeline_start: float = time.monotonic()
+
+    def reset_pipeline_clock(self) -> None:
+        """Reset the pipeline start time (call at the start of each orchestrate() run)."""
+        self._pipeline_start = time.monotonic()
+
+    def check_pipeline_timeout(self) -> Tuple[bool, str]:
+        """
+        Check whether the global pipeline wall-clock timeout has been exceeded.
+        Returns:
+            (timed_out: bool, message: str)
+        """
+        elapsed = time.monotonic() - self._pipeline_start
+        limit = settings.PIPELINE_TIMEOUT_SEC
+        if elapsed >= limit:
+            msg = (
+                f"Pipeline exceeded global timeout of {limit}s "
+                f"(elapsed: {elapsed:.0f}s). Session state saved — "
+                "rerun with the same --session flag to resume."
+            )
+            self.memory.log_event("TimerAgent", msg)
+            return True, msg
+        remaining = limit - elapsed
+        self.memory.log_event(
+            "TimerAgent",
+            f"Pipeline clock OK — {elapsed:.0f}s elapsed, {remaining:.0f}s remaining."
+        )
+        return False, f"{remaining:.0f}s remaining in pipeline budget"
 
     def verify_loop_safety(self, current_error: str) -> Tuple[bool, str]:
         """
         Verifies if we can proceed with debugging or if we are stuck/exceeded bounds.
-        Returns:
-            Tuple[bool, str]: (should_continue, explanation_message)
+
+        Return values use prefixes so head.py can route them correctly:
+          - ``INSTALL:<pkg>``  — attempt pip install of missing package
+          - ``TOOLBOX:<msg>``  — licensed toolbox function unavailable; halt cleanly
+          - ``False, <msg>``   — generic environment or loop-limit halt
+          - ``True, <msg>``    — safe to continue debugging
         """
-        # Read dynamically so --max-loops CLI override takes effect
         max_debug_loops = settings.MAX_DEBUG_LOOPS
         loop_count = self.memory.state.get("loop_count", 0)
-        self.memory.log_event("TimerAgent", f"Evaluating debug iteration quality. Current loop count: {loop_count}/{max_debug_loops}")
+        self.memory.log_event(
+            "TimerAgent",
+            f"Evaluating debug iteration quality. Current loop count: {loop_count}/{max_debug_loops}"
+        )
 
-        # Check for missing python module imports
+        lower_err = current_error.lower()
+
+        # --- Missing Python module → try auto-install ---
         import re
-        match = re.search(r"ModuleNotFoundError:\s*No\s*module\s*named\s*['\"]([^'\"]+)['\"]", current_error)
+        match = re.search(
+            r"ModuleNotFoundError:\s*No\s*module\s*named\s*['\"]([^'\"]+)['\"]",
+            current_error
+        )
         if match:
             missing_module = match.group(1)
             if missing_module != "sandbox" and not missing_module.startswith("sandbox."):
@@ -30,25 +71,36 @@ class TimerAgent:
                 self.memory.log_event("TimerAgent", msg)
                 return False, f"INSTALL:{missing_module}"
 
-        # Check for environment-related errors that the debugger cannot fix
-        env_error_indicators = [
-            "cannot find the file specified",
-            "no module named",
-            "command not found",
-            "matlab not found",
-            "unrecognized as the name of a cmdlet",
-            "is not recognized as an internal or external command",
+        # --- MATLAB licensed-toolbox functions → clean halt (not a planner escalation) ---
+        toolbox_indicators = [
+            "undefined function 'butter'",
+            "undefined function 'filtfilt'",
+            "undefined function 'freqz'",
+            "undefined function 'designfilt'",
+            "undefined function 'tf'",
+            "undefined function 'lsim'",
+            "undefined function 'ss'",
+            "undefined function 'bode'",
+            "undefined function 'nyquist'",
+            "undefined function 'step'",
         ]
+        for indicator in toolbox_indicators:
+            if indicator in lower_err:
+                msg = (
+                    f"TOOLBOX:{indicator!r} requires a licensed MATLAB toolbox that is "
+                    "not available in this environment. The code must be rewritten using "
+                    "only base MATLAB without any licensed toolbox functions."
+                )
+                self.memory.log_event("TimerAgent", msg)
+                return False, msg
 
-        # MATLAB-specific code generation errors — escalate to planner instead of looping
+        # --- MATLAB code generation errors → escalate to planner for full regeneration ---
         matlab_regen_indicators = [
             "invalid text character",           # non-ASCII chars in .m file
             "stub: llm generated python code",  # our Python-in-MATLAB stub
             "auto-generated stub",              # our stub header
             "unsupported symbol",               # MATLAB parse error for bad chars
         ]
-
-        lower_err = current_error.lower()
         for indicator in matlab_regen_indicators:
             if indicator in lower_err:
                 msg = (
@@ -58,34 +110,49 @@ class TimerAgent:
                 self.memory.log_event("TimerAgent", msg)
                 return False, msg
 
+        # --- Generic environment errors the debugger cannot fix ---
+        env_error_indicators = [
+            "cannot find the file specified",
+            "no module named",
+            "command not found",
+            "matlab not found",
+            "unrecognized as the name of a cmdlet",
+            "is not recognized as an internal or external command",
+            # NOTE: bare "undefined function" stays here as last-resort catch-all
+            # but is only hit if none of the specific toolbox_indicators above matched
+            "undefined function",
+        ]
         for indicator in env_error_indicators:
             if indicator in lower_err:
-                msg = f"Environment error detected: '{indicator}'. The debugger cannot fix system/environment issues. Halting loop."
+                msg = (
+                    f"Environment error detected: '{indicator}'. "
+                    "The debugger cannot fix system/environment issues. Halting loop."
+                )
                 self.memory.log_event("TimerAgent", msg)
                 return False, msg
 
-
-        # Check limit
+        # --- Loop count limit ---
         if loop_count >= max_debug_loops:
-            msg = f"Maximum debugging limit ({max_debug_loops}) reached. Halting execution to prevent run-away resource loop."
+            msg = (
+                f"Maximum debugging limit ({max_debug_loops}) reached. "
+                "Halting execution to prevent run-away resource loop."
+            )
             self.memory.log_event("TimerAgent", msg)
             return False, msg
 
-        # Check error progression (are we stuck in an identical error pattern?)
+        # --- Stagnation check: identical consecutive errors ---
         logs = self.memory.state.get("logs", [])
-        error_logs: List[str] = []
-        for entry in logs:
-            if "Execution error trace" in entry["message"]:
-                error_logs.append(entry["message"])
-
-        # If the last two execution errors are identical (excluding timestamps or randomized data), we might be stuck
+        error_logs: List[str] = [
+            entry["message"]
+            for entry in logs
+            if "Execution error trace" in entry["message"]
+        ]
         if len(error_logs) >= 2:
-            last_err = error_logs[-1]
-            prev_err = error_logs[-2]
-            
-            # Simple clean/normalize to compare
-            if self._normalize_error(last_err) == self._normalize_error(prev_err):
-                msg = "Stagnant error signature detected (consecutive identical failures). The coding agent is failing to make progress. Halting loop."
+            if self._normalize_error(error_logs[-1]) == self._normalize_error(error_logs[-2]):
+                msg = (
+                    "Stagnant error signature detected (consecutive identical failures). "
+                    "The coding agent is failing to make progress. Halting loop."
+                )
                 self.memory.log_event("TimerAgent", msg)
                 return False, msg
 
@@ -93,10 +160,9 @@ class TimerAgent:
         return True, "Safe to continue"
 
     def _normalize_error(self, error_text: str) -> str:
-        # Strip directories, timestamps, and whitespace to find core error pattern
-        normalized = error_text.lower()
-        # Remove paths
+        """Strip paths, line numbers, and whitespace to expose the core error pattern."""
         import re
+        normalized = error_text.lower()
         normalized = re.sub(r'file "[^"]+"', 'file ""', normalized)
         normalized = re.sub(r'line \d+', 'line 0', normalized)
         normalized = "".join(normalized.split())

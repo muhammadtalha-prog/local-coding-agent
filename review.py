@@ -1,6 +1,6 @@
 from llm import async_query_llm
 from memory import MemoryAgent
-from settings import REVIEW_PROMPT, get_agent_filenames
+from settings import REVIEW_PROMPT, get_agent_filenames, REVIEW_MODEL
 
 
 class ReviewAgent:
@@ -28,7 +28,7 @@ class ReviewAgent:
         
         try:
             # Query LLM asynchronously using the REVIEW_PROMPT system prompt
-            report = await async_query_llm(prompt, system_instruction=REVIEW_PROMPT)
+            report = await async_query_llm(prompt, system_instruction=REVIEW_PROMPT, model_name=REVIEW_MODEL)
             
             # Save the report in memory
             self.memory.update_state("review_report", report)

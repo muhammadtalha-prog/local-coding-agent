@@ -4,7 +4,7 @@ import re
 from typing import Dict, Any
 from llm import async_query_llm
 from memory import MemoryAgent
-from settings import PLANNER_PROMPT
+from settings import PLANNER_PROMPT, PLANNER_MODEL
 
 logger = logging.getLogger("avionics_framework.planner")
 
@@ -45,7 +45,7 @@ class PlannerAgent:
         for attempt in range(1, max_attempts + 1):
             try:
                 self.memory.log_event("PlannerAgent", f"Querying LLM (async) - attempt {attempt} of {max_attempts}")
-                raw_response = await async_query_llm(current_prompt, system_instruction=system_instruction)
+                raw_response = await async_query_llm(current_prompt, system_instruction=system_instruction, model_name=PLANNER_MODEL)
                 plan_json = self._parse_json_response(raw_response)
                 
                 # Enforce the selected language in the plan JSON

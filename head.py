@@ -52,66 +52,109 @@ class HeadCoordinator:
         Coordinates the entire planning, coding, verification, debugging, safety audit, 
         mandatory human approval, and final sandbox deployment pipeline asynchronously.
         """
-        console.print(Panel("[bold green]Multi-Agent Code Generation System Starting...[/bold green]", title="System Startup"))
-        self.memory.clear_sandbox()
-        self.memory.update_state("description", description)
-        self.memory.update_state("loop_count", 0)
-        self.memory.update_state("logs", [])
+        resuming = (
+            self.memory.state.get("status") == "in_progress"
+            and self.memory.state.get("plan")
+            and self.memory.state.get("source_code")
+            and self.memory.state.get("description") == description
+        )
+
+        if resuming:
+            console.print("[bold cyan]Resuming previous incomplete session...[/bold cyan]")
+            plan = self.memory.state["plan"]
+            language = str(plan.get("language", language)).lower()
+            source_code = self.memory.state.get("source_code", "")
+            test_code = self.memory.state.get("test_code", "")
+            tests_generated = bool(test_code)
+            if "loop_count" not in self.memory.state:
+                self.memory.update_state("loop_count", 0)
+        else:
+            self.memory.clear_sandbox()
+            self.memory.update_state("description", description)
+            self.memory.update_state("loop_count", 0)
+            self.memory.update_state("logs", [])
+            self.memory.update_state("status", "in_progress")
+            tests_generated = False
+            source_code = ""
+            test_code = ""
+
+        # Start the pipeline wall-clock owned by TimerAgent
+        self.timer.reset_pipeline_clock()
+
+        # Reset LLM provider failure state so every task starts with a clean
+        # Groq → HuggingFace → Local chain, regardless of previous task's failures.
+        from llm import reset_provider_state
+        reset_provider_state()
 
         from settings import MAX_PLANNER_ESCALATIONS
         
         planner_escalation_count = 0
         failure_context = ""
+        skip_planning_once = resuming
         
         while True:
-            # 1. Planning
-            console.print(f"[yellow]Planning Agent: Analyzing requirements (Escalation: {planner_escalation_count}/{MAX_PLANNER_ESCALATIONS})...[/yellow]")
-            try:
-                plan = await self.planner.plan(description, language=language, failure_context=failure_context)
-            except Exception as e:
-                return False, f"Planning phase failed: {e}"
+            # 0. Check pipeline-level wall-clock before each outer iteration
+            timed_out, timeout_msg = self.timer.check_pipeline_timeout()
+            if timed_out:
+                self.memory.update_state("status", "timeout")
+                return False, timeout_msg
 
-            language = plan.get("language", "python").lower()
-            
-            # Check environment availability for MATLAB target
-            if language == "matlab":
-                import shutil
-                from pathlib import Path
-                from settings import get_matlab_exe
-                resolved_matlab = get_matlab_exe()
-                matlab_exists = False
-                if resolved_matlab != "matlab" and Path(resolved_matlab).exists():
-                    matlab_exists = True
-                else:
-                    matlab_exists = bool(shutil.which("matlab"))
+            # 1. Planning
+            if skip_planning_once:
+                console.print("[bold cyan]Resuming with existing plan...[/bold cyan]")
+            else:
+                console.print(f"[yellow]Planning Agent: Analyzing requirements (Escalation: {planner_escalation_count}/{MAX_PLANNER_ESCALATIONS})...[/yellow]")
+                try:
+                    plan = await self.planner.plan(description, language=language, failure_context=failure_context)
+                except Exception as e:
+                    self.memory.update_state("status", "failed")
+                    return False, f"Planning phase failed: {e}"
+
+                language = str(plan.get("language", "python")).lower()
                 
-                if not matlab_exists:
-                    console.print("[bold yellow]Warning: MATLAB executable not found. Falling back to Python target...[/bold yellow]")
-                    self.memory.log_event("HeadCoordinator", "MATLAB executable missing. Falling back to Python.")
+                # Check environment availability for MATLAB target
+                if language == "matlab":
+                    import shutil
+                    from pathlib import Path
+                    from settings import get_matlab_exe
+                    resolved_matlab = get_matlab_exe()
+                    matlab_exists = False
+                    if resolved_matlab != "matlab" and Path(resolved_matlab).exists():
+                        matlab_exists = True
+                    else:
+                        matlab_exists = bool(shutil.which("matlab"))
                     
-                    # Modify plan for python fallback
-                    plan["language"] = "python"
-                    # Rename file_name regardless of whether it has .m extension
-                    raw_name = plan.get("file_name", "") or ""
-                    plan["file_name"] = raw_name.replace(".m", "")
-                    if "components" in plan and isinstance(plan["components"], list):
-                        for comp in plan["components"]:
-                            if "name" in comp and comp["name"]:
-                                comp["name"] = comp["name"].replace(".m", "")
-                                
-                    self.memory.update_state("language", "python")
-                    self.memory.update_state("plan", plan)
-                    language = "python"
+                    if not matlab_exists:
+                        console.print("[bold yellow]Warning: MATLAB executable not found. Falling back to Python target...[/bold yellow]")
+                        self.memory.log_event("HeadCoordinator", "MATLAB executable missing. Falling back to Python.")
+                        
+                        # Modify plan for python fallback
+                        plan["language"] = "python"
+                        # Rename file_name regardless of whether it has .m extension
+                        raw_name = plan.get("file_name", "") or ""
+                        plan["file_name"] = raw_name.replace(".m", "")
+                        if "components" in plan and isinstance(plan["components"], list):
+                            for comp in plan["components"]:
+                                if "name" in comp and comp["name"]:
+                                    comp["name"] = comp["name"].replace(".m", "")
+                                    
+                        self.memory.update_state("language", "python")
+                        self.memory.update_state("plan", plan)
+                        language = "python"
             
-            console.print("[yellow]Coding Agent: Generating implementation source code...[/yellow]")
-            try:
-                source_code = await self.coder.generate_code(description, plan)
-            except Exception as e:
-                return False, f"Code generation phase failed: {e}"
+            # 2. Coding
+            if skip_planning_once:
+                console.print("[bold cyan]Resuming with existing source code...[/bold cyan]")
+                skip_planning_once = False
+            else:
+                console.print("[yellow]Coding Agent: Generating implementation source code...[/yellow]")
+                try:
+                    source_code = await self.coder.generate_code(description, plan)
+                except Exception as e:
+                    self.memory.update_state("status", "failed")
+                    return False, f"Code generation phase failed: {e}"
 
             # 3. Main Testing & Debugging Loop
-            tests_generated = False
-            test_code = ""
             last_log = ""
             loop_success = False
 
@@ -124,16 +167,27 @@ class HeadCoordinator:
                 
                 if not lint_pass:
                     console.print(Panel(f"[bold red]Linter verification failed:[/bold red]\n{lint_report}", title="Lint Failure"))
-                    self.memory.log_event("HeadCoordinator", f"Linter issues found:\n{lint_report}")
+                    self.memory.log_event("HeadCoordinator", f"Execution error trace (lint):\n{lint_report}")
                     
                     # Check with Timer Agent if we should halt
                     continue_debug, message = self.timer.verify_loop_safety(lint_report)
                     if not continue_debug:
                         if message.startswith("INSTALL:"):
-                            missing_module = message.split(":")[1]
+                            missing_module = message.split(":", 1)[1]
                             installed = await self._install_missing_package(missing_module)
                             if installed:
                                 continue
+                        if message.startswith("TOOLBOX:"):
+                            # Licensed toolbox unavailable — clean halt, do NOT escalate to planner
+                            console.print(Panel(
+                                f"[bold red]Toolbox Halt:[/bold red] {message[8:]}\n\n"
+                                "[yellow]Fix: Rewrite the algorithm using only base MATLAB functions "
+                                "(no licensed toolboxes). Update CODER_PROMPT and retry.[/yellow]",
+                                title="Environment Constraint — Toolbox Unavailable",
+                                border_style="red"
+                            ))
+                            self.memory.update_state("status", "failed")
+                            return False, message
                         console.print(f"[bold red]Circuit Breaker Triggered: {message}[/bold red]")
                         break
                     
@@ -164,10 +218,21 @@ class HeadCoordinator:
                     current_loop_limit, message = self.timer.verify_loop_safety(test_report)
                     if not current_loop_limit:
                         if message.startswith("INSTALL:"):
-                            missing_module = message.split(":")[1]
+                            missing_module = message.split(":", 1)[1]
                             installed = await self._install_missing_package(missing_module)
                             if installed:
                                 continue
+                        if message.startswith("TOOLBOX:"):
+                            # Licensed toolbox unavailable — clean halt, do NOT escalate to planner
+                            console.print(Panel(
+                                f"[bold red]Toolbox Halt:[/bold red] {message[8:]}\n\n"
+                                "[yellow]Fix: Rewrite the algorithm using only base MATLAB functions "
+                                "(no licensed toolboxes). Update CODER_PROMPT and retry.[/yellow]",
+                                title="Environment Constraint — Toolbox Unavailable",
+                                border_style="red"
+                            ))
+                            self.memory.update_state("status", "failed")
+                            return False, message
                         console.print(f"[bold red]Circuit Breaker Triggered: {message}[/bold red]")
                         break
 
@@ -188,10 +253,14 @@ class HeadCoordinator:
                 planner_escalation_count += 1
                 failure_context = last_log
                 console.print(f"[bold yellow]Escalating to Planner Agent to revise architecture (Attempt {planner_escalation_count}/{MAX_PLANNER_ESCALATIONS})...[/bold yellow]")
+                # Reset testing status for the escalated plan
+                tests_generated = False
+                test_code = ""
                 # Reset iteration loop count for new architecture run
                 self.memory.update_state("loop_count", 0)
                 continue
             else:
+                self.memory.update_state("status", "failed")
                 return False, f"Halted: Maximum planner escalations ({MAX_PLANNER_ESCALATIONS}) reached without resolving safety check issues. Last log:\n{last_log}"
 
         from settings import ENABLE_REVIEW
@@ -221,6 +290,7 @@ class HeadCoordinator:
             if approval not in ("y", "yes"):
                 self.memory.log_event("HeadCoordinator", "Deployment rejected by engineer.")
                 console.print("[bold red]Deployment Rejected. Halting system without copying to workspace/ directory.[/bold red]")
+                self.memory.update_state("status", "failed")
                 return False, "Deployment rejected by engineer during Human-in-the-Loop approval step."
             
             console.print("[bold green]Deployment Approved by Engineer! Converting to interactive user script...[/bold green]")
