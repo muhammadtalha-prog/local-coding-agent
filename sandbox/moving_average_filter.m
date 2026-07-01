@@ -1,27 +1,33 @@
 % filepath: sandbox/moving_average_filter.m
 
-function averages = moving_average_filter(signal, window_size)
-    % Check if input signal is a valid 1D array and window size is a positive integer
-    if ~isvector(signal) || length(signal) == 0 || ~isscalar(window_size) || window_size <= 0
-        error('Invalid input: Signal must be a non-empty 1D array and window size must be a positive integer.');
+function filtered_signal = moving_average_filter(signal_vector, window_size)
+    % Check if input is a 1D array and has at least one element
+    if ~isvector(signal_vector) || isempty(signal_vector)
+        error('Input must be a non-empty 1D array.');
     end
     
-    % Calculate the number of windows that can fit into the signal
-    num_windows = length(signal) - window_size + 1;
+    % Check if window size is a positive integer
+    if ~isscalar(window_size) || window_size <= 0
+        error('Window size must be a positive integer.');
+    end
     
-    % Initialize an empty array to store the moving averages
-    averages = zeros(1, num_windows);
+    % Calculate the number of elements to consider in each window
+    num_elements = length(signal_vector);
+    
+    % Initialize the filtered signal array with zeros
+    filtered_signal = zeros(1, num_elements - window_size + 1);
     
     % Compute the moving average for each window
-    for i = 1:num_windows
-        averages(i) = mean(signal(i:i+window_size-1));
+    for i = 1:num_elements - window_size + 1
+        window = signal_vector(i:i+window_size-1);
+        filtered_signal(i) = sum(window) / window_size;
     end
     
-    % Return the computed moving averages
+    % Return the filtered signal
 end
 
 % Test script for moving_average_filter
 addpath('.');
-result = moving_average_filter([1, 2, 3, 4, 5], 2);
-assert(abs(result - [2, 3, 4]) < 1e-9, 'Test 1 failed');
+result = moving_average_filter([1, 2, 3, 4, 5], 3);
+assert(abs(result - [1, 2, 3]) < 1e-9, 'Test 1 failed');
 disp('All tests passed.');
