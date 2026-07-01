@@ -58,6 +58,18 @@ class TimerAgent:
 
         lower_err = current_error.lower()
 
+        # Active Lessons Learned on fatal error
+        if "local function name must be different from the script name" in lower_err:
+            self.memory.save_lesson({
+                "mistake": "Local function name conflict",
+                "correction": "MATLAB main function name must match filename and no local function can share this name."
+            })
+        if "stub: llm generated python code" in lower_err:
+            self.memory.save_lesson({
+                "mistake": "Python syntax leaked into MATLAB code",
+                "correction": "Ensure MATLAB file ends with function declaration matching filename and contains pure MATLAB syntax (no def, import, or class)."
+            })
+
         # --- Missing Python module → try auto-install ---
         import re
         match = re.search(

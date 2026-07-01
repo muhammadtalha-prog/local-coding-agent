@@ -63,11 +63,15 @@ class LinterAgent:
         import subprocess
         from settings import DOCKER_ENABLED
         if DOCKER_ENABLED:
-            self.memory.log_event("LinterAgent", "Linter checking if Docker daemon is running...")
+            self.memory.log_event("LinterAgent", "Linter checking if Docker daemon is running and image 'python-sandbox' exists...")
             try:
                 res = subprocess.run(["docker", "info"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
                 if res.returncode == 0:
-                    docker_running = True
+                    res_img = subprocess.run(["docker", "image", "inspect", "python-sandbox"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
+                    if res_img.returncode == 0:
+                        docker_running = True
+                    else:
+                        self.memory.log_event("LinterAgent", "Docker image 'python-sandbox' not found. Falling back to host execution.")
             except FileNotFoundError:
                 self.memory.log_event("LinterAgent", "Error checking Docker status: [WinError 2] The system cannot find the file specified. Falling back to host execution.")
             except Exception as e:
@@ -132,6 +136,26 @@ class LinterAgent:
                 return True, "MATLAB mlint skipped: timed out."
             stdout_str = stdout.decode("utf-8", errors="replace")
             ret_code = proc.returncode if proc.returncode is not None else -1
+            
+            # Treat specific mlint errors as fatal structural errors
+            import re
+            fatal_patterns = [
+                r"Local function name must be different",
+                r"Unable to define local function",
+                r"Function return value might be unset",
+                r"Invalid expression",
+                r"Class name and filename must match",
+            ]
+            fatal_found = False
+            for pattern in fatal_patterns:
+                if re.search(pattern, stdout_str, re.IGNORECASE):
+                    fatal_found = True
+                    break
+                    
+            if fatal_found:
+                self.memory.log_event("LinterAgent", f"MATLAB fatal error detected:\n{stdout_str}")
+                return False, f"MATLAB fatal lint error:\n{stdout_str}"
+                
             if ret_code == 0 and "L " in stdout_str:
                 self.memory.log_event("LinterAgent", f"MATLAB mlint found suggestions:\n{stdout_str}")
                 return True, f"MATLAB mlint Warnings (Non-fatal):\n{stdout_str}"

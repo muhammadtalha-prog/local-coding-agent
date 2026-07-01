@@ -28,24 +28,39 @@ class ExecutorAgent:
                 return False, f"Error: {test_filename} does not exist."
 
             docker_running = False
-            from settings import DOCKER_ENABLED
+            docker_error = None
+            from settings import DOCKER_ENABLED, HOST_FALLBACK_ALLOWED
             if DOCKER_ENABLED:
-                self.memory.log_event("ExecutorAgent", "Checking if Docker daemon is running...")
+                self.memory.log_event("ExecutorAgent", "Checking if Docker daemon is running and image 'python-sandbox' exists...")
                 try:
                     res = subprocess.run(["docker", "info"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
                     if res.returncode == 0:
-                        docker_running = True
+                        res_img = subprocess.run(["docker", "image", "inspect", "python-sandbox"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
+                        if res_img.returncode == 0:
+                            docker_running = True
+                        else:
+                            docker_error = "Docker image 'python-sandbox' is not built/found. Please run 'docker build -t python-sandbox .' to build it."
+                    else:
+                        docker_error = f"docker info returned non-zero code {res.returncode}"
                 except FileNotFoundError:
-                    self.memory.log_event("ExecutorAgent", "Error checking Docker status: [WinError 2] The system cannot find the file specified. Falling back to host execution.")
+                    docker_error = "docker command not found in PATH"
                 except Exception as e:
-                    self.memory.log_event("ExecutorAgent", f"Error checking Docker status: {e}. Falling back to host execution.")
+                    docker_error = str(e)
+
+            if DOCKER_ENABLED and not docker_running:
+                if not HOST_FALLBACK_ALLOWED:
+                    msg = f"Docker execution is enabled but Docker daemon is not available/running: {docker_error}. Host execution fallback is disabled."
+                    self.memory.log_event("ExecutorAgent", f"CRITICAL: {msg}")
+                    raise RuntimeError(msg)
+                else:
+                    self.memory.log_event("ExecutorAgent", f"Warning: Docker check failed ({docker_error}). Falling back to host execution since HOST_FALLBACK_ALLOWED=True.")
 
             if docker_running:
                 self.memory.log_event("ExecutorAgent", "Running tests inside Docker sandbox...")
                 cmd = ["docker", "run", "--rm", "-v", f"{sandbox_dir}:/app/sandbox", "python-sandbox", "pytest", "-v", f"sandbox/{test_filename}"]
             else:
                 python_exe = get_python_exe()
-                self.memory.log_event("ExecutorAgent", f"Falling back to host python execution. Running tests with: {python_exe}")
+                self.memory.log_event("ExecutorAgent", f"Running on host. Executing tests with: {python_exe}")
                 cmd = [python_exe, "-m", "pytest", "-v",
                        f"--rootdir={ROOT_DIR}", "--import-mode=importlib",
                        f"sandbox/{test_filename}"]
@@ -99,8 +114,8 @@ class ExecutorAgent:
                 )
             cmd = [matlab_exe, "-batch", matlab_cmd]
             from settings import DEFAULT_TIMEOUT_SEC
-            actual_timeout = timeout if timeout is not None else DEFAULT_TIMEOUT_SEC
-            run_timeout = actual_timeout + 15.0 if actual_timeout is not None else TEST_TIMEOUT_SEC + 15.0
+            actual_timeout = timeout if timeout is not None else (DEFAULT_TIMEOUT_SEC if DEFAULT_TIMEOUT_SEC is not None else TEST_TIMEOUT_SEC)
+            run_timeout = actual_timeout + 15.0
             return await self._run_command_async(cmd, run_timeout)
 
         else:
@@ -118,24 +133,39 @@ class ExecutorAgent:
                 return False, f"Error: {source_filename} does not exist."
 
             docker_running = False
-            from settings import DOCKER_ENABLED
+            docker_error = None
+            from settings import DOCKER_ENABLED, HOST_FALLBACK_ALLOWED
             if DOCKER_ENABLED:
-                self.memory.log_event("ExecutorAgent", "Checking if Docker daemon is running...")
+                self.memory.log_event("ExecutorAgent", "Checking if Docker daemon is running and image 'python-sandbox' exists...")
                 try:
                     res = subprocess.run(["docker", "info"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
                     if res.returncode == 0:
-                        docker_running = True
+                        res_img = subprocess.run(["docker", "image", "inspect", "python-sandbox"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
+                        if res_img.returncode == 0:
+                            docker_running = True
+                        else:
+                            docker_error = "Docker image 'python-sandbox' is not built/found. Please run 'docker build -t python-sandbox .' to build it."
+                    else:
+                        docker_error = f"docker info returned non-zero code {res.returncode}"
                 except FileNotFoundError:
-                    self.memory.log_event("ExecutorAgent", "Error checking Docker status: [WinError 2] The system cannot find the file specified. Falling back to host execution.")
+                    docker_error = "docker command not found in PATH"
                 except Exception as e:
-                    self.memory.log_event("ExecutorAgent", f"Error checking Docker status: {e}. Falling back to host execution.")
+                    docker_error = str(e)
+
+            if DOCKER_ENABLED and not docker_running:
+                if not HOST_FALLBACK_ALLOWED:
+                    msg = f"Docker execution is enabled but Docker daemon is not available/running: {docker_error}. Host execution fallback is disabled."
+                    self.memory.log_event("ExecutorAgent", f"CRITICAL: {msg}")
+                    raise RuntimeError(msg)
+                else:
+                    self.memory.log_event("ExecutorAgent", f"Warning: Docker check failed ({docker_error}). Falling back to host execution since HOST_FALLBACK_ALLOWED=True.")
 
             if docker_running:
                 self.memory.log_event("ExecutorAgent", "Executing final script inside Docker sandbox...")
                 cmd = ["docker", "run", "--rm", "-v", f"{sandbox_dir}:/app/sandbox", "python-sandbox", "python", f"sandbox/{source_filename}"]
             else:
                 python_exe = get_python_exe()
-                self.memory.log_event("ExecutorAgent", f"Falling back to host python execution. Executing final script with: {python_exe}")
+                self.memory.log_event("ExecutorAgent", f"Running on host. Executing final script with: {python_exe}")
                 cmd = [python_exe, f"sandbox/{source_filename}"]
 
             # Use caller-supplied timeout, or fall back to the configurable setting
@@ -169,8 +199,8 @@ class ExecutorAgent:
             )
             cmd = [matlab_exe, "-batch", matlab_cmd]
             from settings import DEFAULT_TIMEOUT_SEC
-            actual_timeout = timeout if timeout is not None else DEFAULT_TIMEOUT_SEC
-            run_timeout = actual_timeout + 15.0 if actual_timeout is not None else EXEC_TIMEOUT_SEC + 15.0
+            actual_timeout = timeout if timeout is not None else (DEFAULT_TIMEOUT_SEC if DEFAULT_TIMEOUT_SEC is not None else EXEC_TIMEOUT_SEC)
+            run_timeout = actual_timeout + 15.0
             return await self._run_command_async(cmd, run_timeout)
 
         else:

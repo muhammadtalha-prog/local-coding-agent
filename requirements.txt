@@ -10,3 +10,5 @@ pylint>=3.0.0
 radon>=6.0.0
 json-repair>=0.13.0
 freezegun>=1.2.0
+litellm>=1.0.0
+jinja2>=3.0.0

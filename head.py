@@ -95,6 +95,7 @@ class HeadCoordinator:
         
         planner_escalation_count = 0
         failure_context = ""
+        failure_hint = ""
         skip_planning_once = resuming
         
         while True:
@@ -110,7 +111,7 @@ class HeadCoordinator:
             else:
                 console.print(f"[yellow]Planning Agent: Analyzing requirements (Escalation: {planner_escalation_count}/{MAX_PLANNER_ESCALATIONS})...[/yellow]")
                 try:
-                    plan = await self.planner.plan(description, language=language, failure_context=failure_context)
+                    plan = await self.planner.plan(description, language=language, failure_context=failure_context, failure_hint=failure_hint)
                 except Exception as e:
                     self.memory.update_state("status", "failed")
                     return False, f"Planning phase failed: {e}"
@@ -257,6 +258,24 @@ class HeadCoordinator:
             if planner_escalation_count < MAX_PLANNER_ESCALATIONS:
                 planner_escalation_count += 1
                 failure_context = last_log
+                
+                # Determine failure hint based on the actual failure logs
+                failure_hint = ""
+                log_lower = last_log.lower()
+                if "local function name must be different from the script name" in log_lower or "unable to define local function" in log_lower:
+                    failure_hint = "The previous code failed because the main function name conflicted with local function definitions. Please design a solution using a single function or rename the helper function."
+                elif "stub: llm generated python code" in log_lower:
+                    failure_hint = "The previous code contained Python syntax leaked into MATLAB. Please design a solution using pure MATLAB syntax."
+                elif "arrays have incompatible sizes" in log_lower:
+                    failure_hint = "Check that vector dimensions and filter window sizes match. Programmatically verify constraints in the plan."
+                
+                # MATLAB Script Fallback Strategy:
+                # If function-based MATLAB generation fails repeatedly (e.g. at second escalation),
+                # instruct the planner to switch to generating a pure script instead of a function definition.
+                if language == "matlab" and planner_escalation_count >= 2:
+                    failure_hint += " CRITICAL: Function-based MATLAB design has failed repeatedly. Switch to a SCRIPT-based execution model (no function definition header, variables defined in script body)."
+                    self.memory.update_state("use_script_mode", True)
+                    
                 console.print(f"[bold yellow]Escalating to Planner Agent to revise architecture (Attempt {planner_escalation_count}/{MAX_PLANNER_ESCALATIONS})...[/bold yellow]")
                 # Reset testing status for the escalated plan
                 tests_generated = False
@@ -416,6 +435,7 @@ class HeadCoordinator:
         else:
             report_msg = f"{exec_report}\n\n[FAILURE] Final execution check failed. Error details:\n{exec_report}"
             return False, report_msg
+
     async def _install_missing_package(self, module_name: str) -> bool:
         """Install a missing Python package by name, with common alias remapping."""
         import subprocess

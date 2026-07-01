@@ -8,6 +8,10 @@ WORKSPACE_DIR = ROOT_DIR
 
 # Load .env variables manually to avoid extra dependencies
 env_path = ROOT_DIR / ".env"
+if not env_path.exists():
+    # Fallback to _env if .env doesn't exist
+    env_path = ROOT_DIR / "_env"
+
 if env_path.exists():
     with open(env_path, "r", encoding="utf-8") as f:
         for line in f:
@@ -30,7 +34,8 @@ DEFAULT_TIMEOUT_SEC: Optional[float] = None
 MAX_DEBUG_LOOPS = 5
 MAX_PLANNER_ESCALATIONS = 3
 PIPELINE_TIMEOUT_SEC = int(os.getenv("PIPELINE_TIMEOUT_SEC", "1800"))  # 30 min global watchdog
-DOCKER_ENABLED = os.getenv("DOCKER_ENABLED", "False").lower() in ("true", "1", "yes")
+DOCKER_ENABLED = os.getenv("DOCKER_ENABLED", "True").lower() in ("true", "1", "yes")
+HOST_FALLBACK_ALLOWED = os.getenv("HOST_FALLBACK_ALLOWED", "False").lower() in ("true", "1", "yes")
 AUTO_APPROVE = os.getenv("AUTO_APPROVE", "True").lower() in ("true", "1", "yes")
 
 # Subprocess Timeout Configuration
@@ -66,6 +71,8 @@ if not LLM_PROVIDER:
 
 ENABLE_REVIEW = os.getenv("ENABLE_REVIEW", "True").lower() in ("true", "1", "yes")
 ENABLE_DEPLOY = os.getenv("ENABLE_DEPLOY", "True").lower() in ("true", "1", "yes")
+TRIM_LOCAL_PROMPTS = os.getenv("TRIM_LOCAL_PROMPTS", "True").lower() in ("true", "1", "yes")
+DEBUGGER_GIT_COMMIT = os.getenv("DEBUGGER_GIT_COMMIT", "False").lower() in ("true", "1", "yes")
 
 DEFAULT_LLM_TIMEOUT = float(os.getenv("DEFAULT_LLM_TIMEOUT", "300"))
 
@@ -80,7 +87,7 @@ DEPLOY_MODEL = os.getenv("DEPLOY_MODEL", "")
 # Local LLM Fallback (Ollama)
 LOCAL_LLM_ENABLED = os.getenv("LOCAL_LLM_ENABLED", "False").lower() in ("true", "1", "yes")
 LOCAL_LLM_API_BASE = os.getenv("LOCAL_LLM_API_BASE", "http://localhost:11434").strip().rstrip("/")
-LOCAL_LLM_MODEL = os.getenv("LOCAL_LLM_MODEL", "qwen2.5-coder:1.5b")
+LOCAL_LLM_MODEL = os.getenv("LOCAL_LLM_MODEL", "qwen2.5-coder:3b")
 LOCAL_LLM_TIMEOUT = float(os.getenv("LOCAL_LLM_TIMEOUT", "180"))
 
 # Local vLLM Server Settings (OpenAI-compatible)
@@ -124,7 +131,7 @@ Requirements:
    c. ALL methods (insert, search, delete, etc.) defined INSIDE the class body with correct `self` parameter and INDENTED under the class.
    d. NEVER define these as top-level standalone functions outside the class.
    e. Input validation (TypeError/ValueError) inside each method, not at module level.
-4. For MATLAB: When the target filename ends with `.m`, you MUST write pure MATLAB code. Never write Python syntax (no `def`, no `import`, no `class`, no `from ... import`, no `#` for comments, no Python-style colons at the end of function/control headers). Always structure the code as a clean function file where the main function matching the filename (e.g. `function output = generate_sine_wave(t, f, a)`) is at the very top, and all helper functions are declared below it. Do NOT write top-level script commands outside function definitions.
+4. For MATLAB: When the target filename ends with `.m`, you MUST write pure MATLAB code. Never write Python syntax (no `def`, no `import`, no `class`, no `from ... import`, no `#` for comments, no Python-style colons at the end of function/control headers). Always structure the code as a clean function file where the main function matching the filename (e.g. `function output = generate_sine_wave(t, f, a)`) is at the very top, and all helper functions are declared below it. Do NOT write top-level script commands outside function definitions. Never define a local function with the same name as the file. If the file is `moving_average_filter.m`, the main function must be `function output = moving_average_filter(...)` and no other function called `moving_average_filter` may exist.
 5. Prefer using Python's built-in standard library modules (like `csv`, `statistics`, `math`, `json`, `datetime`) over external third-party libraries (like `pandas`, `numpy`, `scipy`) unless explicitly directed otherwise. This ensures the code runs instantly without extra installation steps.
 6. CRITICAL ASCII RULE: Never use mathematical/Greek symbols in code or comments — no pi-symbol, delta, mu, degree, omega, alpha, beta, less-than-or-equal, greater-than-or-equal, times, sqrt. Always spell them out in plain ASCII English (e.g. write "pi", "delta", "mu", "degrees", "omega" instead). This applies to comments and string literals too, not just code.
 7. Do NOT output any markdown explanations, chat, or warnings. Output ONLY the raw code. If using markdown code blocks, prefix the response with ```python or ```matlab and end with ```.
@@ -163,6 +170,7 @@ Requirements:
    ```
 7. Output ONLY the test code inside standard markdown code blocks (e.g., ```python ... ``` or ```matlab ... ```). Do not add extra comments or explanation.
 8. When mocking datetime in Python tests, use the `freezegun` library or mock it without recursive side_effects (do NOT use `side_effect = lambda *args: datetime.datetime(*args)` as it leads to infinite recursion and RecursionError).
+9. When generating MATLAB tests, first check if the implementation is a script (no function definition) or a function. If it's a script, use `run('filename.m')` and verify variables. If it's a function, call it with arguments.
 """
 
 
@@ -207,6 +215,7 @@ CRITICAL MATLAB BUG FIX RULE:
 2. If you get an error like "Unable to define local function ... because it has the same name as the file", the file is structured as a script with local functions, which is illegal. You MUST structure the file as a clean function file (the main function matching the filename must be at the very top, with no executable commands outside function definitions).
 3. If correcting a MATLAB test class, do NOT use illegal attributes like `(TestSuite)` on the classdef line.
 4. CRITICAL ASCII RULE: Never use mathematical/Greek symbols in code or comments — no pi-symbol, delta, mu, degree, omega, alpha, beta. Always spell them out in plain ASCII English.
+5. If you see an error about a local function with the same name as the file, rename the local helper function (e.g., append '_helper') or restructure the file as a script.
 
 You must specify which file you are correcting by placing a filepath comment on the very first line of your code output:
 For Python: `# filepath: sandbox/<filename>.py` or `# filepath: sandbox/test_<filename>.py`
@@ -224,22 +233,47 @@ DEBUGGER_PROMPT += """
 CRITICAL TOOLBOX RESTRICTION: Do NOT use any function from MATLAB's licensed toolboxes (Signal Processing Toolbox, Control System Toolbox, Statistics Toolbox, etc.) — including butter, filtfilt, freqz, designfilt, fft-based filter design helpers, etc. These may not be installed/licensed in the execution environment. Implement required signal processing algorithms (e.g. Butterworth lowpass filter) manually using only base MATLAB matrix/array operations and the bilinear transform formula, so the code runs with zero toolbox dependencies.
 """
 
-REVIEW_PROMPT = """You are the Senior Code Review Agent.
-Your task is to conduct a thorough review of the generated source code and test suite.
-You must evaluate:
-1. Correctness — does the code correctly implement the requirements?
-2. Input validation — are edge cases (empty inputs, zero, negative numbers, type errors) handled?
-3. Code quality — is the code readable, well-structured, and maintainable?
-4. Test coverage — do the tests adequately cover normal, edge, and failure cases?
+REVIEW_PROMPT = """You are the Senior Code Review Agent specializing in DO-178C (Software Considerations in Airborne Systems and Equipment Certification) compliance.
+Your task is to conduct a rigorous safety, correctness, and verification audit of the generated source code and test suite.
 
-Structure your final report in clean Markdown format with the following sections:
-- Executive Summary (Pass/Fail recommendation)
-- Correctness & Logic Verification
-- Input Validation & Edge Case Handling
-- Code Quality Assessment
-- Identified Issues & Recommendations
+Your final report MUST be written in clean Markdown and contain the following structured sections:
 
-Be analytical and precise. If any bug or significant issue exists, document it clearly.
+# DO-178C COMPLIANCE & SAFETY AUDIT REPORT
+
+## 1. Executive Summary
+- **Compliance Status**: [PASS / FAIL] (Conforms to safety guidelines?)
+- **Risk Assessment**: [LOW / MEDIUM / HIGH]
+- **Key Findings**: A brief summary of compliance or design violations.
+
+## 2. Requirement Traceability Matrix
+Provide a Markdown table tracing the requirements from the System Plan/Requirements to the low-level implementation.
+Columns:
+- **Requirement ID**: Unique identifier (e.g. REQ-001)
+- **Requirement Description**: Short description of the requirement
+- **Source File Location**: The function/class name and line number range where implemented (e.g., `binary_search.py: L15-30`)
+- **Status**: [Fully Implemented / Partially Implemented / Missing]
+
+## 3. Requirement-to-Test Mapping (Verification Coverage)
+Provide a Markdown table mapping requirements/safety contracts to the automated test suite.
+Columns:
+- **Requirement ID**: Corresponding ID from the Traceability Matrix
+- **Safety/Input Contract**: Description of input bounds, pre/post-conditions, or validation check
+- **Test File Location**: The test function name verifying this contract (e.g., `test_binary_search.py: test_invalid_input`)
+- **Verification Status**: [Verified / Unverified]
+
+## 4. DO-178C Software Life Cycle Conformance Checklist
+Evaluate the software artifact conformance against the following criteria (provide a Markdown checklist):
+- [ ] **HLR to LLR Traceability**: High-Level Requirements are fully elaborated into Low-Level Requirements in the plan.
+- [ ] **LLR to Source Code Traceability**: All code segments map to Low-Level Requirements.
+- [ ] **No Inactive/Dead Code**: Verify there are no unused imports, functions, dead branches, or unreachable code.
+- [ ] **Input Robustness & Boundary Coverage**: Verify there are explicit checks for invalid inputs, division-by-zero, out-of-bounds, empty sets, and type safety.
+- [ ] **Dynamic Calculation Verification**: Verify that test expectations are programmatically computed rather than hardcoded.
+
+## 5. Identified Safety/Code Quality Issues & Recommendations
+- List any potential risks, coding standard violations, memory leaks, concurrency issues, or MATLAB toolbox dependencies.
+- Provide clear, actionable recommendations for remediation.
+
+Be analytical, precise, and rigorous. Do not assume compliance; verify it line by line.
 """
 
 def get_agent_filenames(plan_json: dict) -> tuple[str, str]:
@@ -328,29 +362,61 @@ def get_matlab_exe() -> str:
             return get_matlab_exe._cached
 
     # 3. Multi-drive, multi-version Program Files scan
-    drives = ["C:", "D:", "E:", "F:"]
-    pf_dirs = ["Program Files", "Program Files (x86)"]
-    # Match both R20XXa/b style and plain numeric versions
-    import re as _re
-    version_re = _re.compile(r"^R?20\d{2}[ab]?$", _re.IGNORECASE)
+    import sys
+    if sys.platform.startswith("win"):
+        drives = ["C:", "D:", "E:", "F:"]
+        pf_dirs = ["Program Files", "Program Files (x86)"]
+        # Match both R20XXa/b style and plain numeric versions
+        import re as _re
+        version_re = _re.compile(r"^R?20\d{2}[ab]?$", _re.IGNORECASE)
 
-    for drive in drives:
-        for pf in pf_dirs:
-            base = Path(f"{drive}/{pf}/MATLAB")
-            if not base.exists():
-                continue
-            # Collect and sort versions descending (newest first)
+        for drive in drives:
+            for pf in pf_dirs:
+                base = Path(f"{drive}/{pf}/MATLAB")
+                if not base.exists():
+                    continue
+                # Collect and sort versions descending (newest first)
+                versions = sorted(
+                    [v for v in base.iterdir() if v.is_dir() and version_re.match(v.name)],
+                    key=lambda v: v.name,
+                    reverse=True,
+                )
+                for ver_dir in versions:
+                    for arch in ["bin", "bin/win64"]:
+                        candidate = ver_dir / arch / "matlab.exe"
+                        if _probe(candidate):
+                            get_matlab_exe._cached = str(candidate)
+                            return get_matlab_exe._cached
+    elif sys.platform.startswith("linux"):
+        base = Path("/usr/local/MATLAB")
+        if base.exists():
+            import re as _re
+            version_re = _re.compile(r"^R?20\d{2}[ab]?$", _re.IGNORECASE)
             versions = sorted(
                 [v for v in base.iterdir() if v.is_dir() and version_re.match(v.name)],
                 key=lambda v: v.name,
                 reverse=True,
             )
             for ver_dir in versions:
-                for arch in ["bin", "bin/win64"]:
-                    candidate = ver_dir / arch / "matlab.exe"
-                    if _probe(candidate):
-                        get_matlab_exe._cached = str(candidate)
-                        return get_matlab_exe._cached
+                candidate = ver_dir / "bin" / "matlab"
+                if _probe(candidate):
+                    get_matlab_exe._cached = str(candidate)
+                    return get_matlab_exe._cached
+    elif sys.platform == "darwin":
+        base = Path("/Applications")
+        if base.exists():
+            import re as _re
+            version_re = _re.compile(r"^MATLAB_R?20\d{2}[ab]?\.app$", _re.IGNORECASE)
+            versions = sorted(
+                [v for v in base.iterdir() if v.is_dir() and version_re.match(v.name)],
+                key=lambda v: v.name,
+                reverse=True,
+            )
+            for ver_dir in versions:
+                candidate = ver_dir / "bin" / "matlab"
+                if _probe(candidate):
+                    get_matlab_exe._cached = str(candidate)
+                    return get_matlab_exe._cached
 
     # 4. PATH scan
     which_result = shutil.which("matlab")

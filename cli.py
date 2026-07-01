@@ -110,6 +110,28 @@ def main(description: str, session: str, timeout: float, max_loops: int, languag
 
 
 
+    # Validate Docker availability at startup if Docker is the execution target
+    if settings.DOCKER_ENABLED:
+        import subprocess as _sp
+        try:
+            res = _sp.run(["docker", "info"], stdout=_sp.PIPE, stderr=_sp.PIPE, timeout=5)
+            if res.returncode != 0:
+                if not settings.HOST_FALLBACK_ALLOWED:
+                    error_console.print("[bold red]ERROR: Docker is enabled but the Docker daemon is not running.[/bold red]")
+                    error_console.print("Start Docker Desktop or set HOST_FALLBACK_ALLOWED=True in .env to allow host execution.")
+                    sys.exit(1)
+                else:
+                    console.print("[yellow]Warning: Docker daemon not running. Will fall back to host execution (HOST_FALLBACK_ALLOWED=True).[/yellow]")
+        except FileNotFoundError:
+            if not settings.HOST_FALLBACK_ALLOWED:
+                error_console.print("[bold red]ERROR: Docker is enabled but 'docker' command not found.[/bold red]")
+                error_console.print("Install Docker or set DOCKER_ENABLED=False / HOST_FALLBACK_ALLOWED=True in .env.")
+                sys.exit(1)
+            else:
+                console.print("[yellow]Warning: docker command not found. Will fall back to host execution.[/yellow]")
+        except Exception as e:
+            console.print(f"[yellow]Warning: Docker check failed ({e}). Will attempt host fallback if needed.[/yellow]")
+
     # Validate Python dev tools (ruff, mypy, pytest) — only needed for Python targets
     if language.lower() == "python" and not settings.DOCKER_ENABLED:
         python_exe = settings.get_python_exe()

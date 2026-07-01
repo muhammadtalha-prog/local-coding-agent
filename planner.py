@@ -12,11 +12,16 @@ class PlannerAgent:
     def __init__(self, memory_agent: MemoryAgent):
         self.memory = memory_agent
 
-    async def plan(self, description: str, language: str, failure_context: str = "") -> Dict[str, Any]:
+    async def plan(self, description: str, language: str, failure_context: str = "", failure_hint: str = "") -> Dict[str, Any]:
         self.memory.log_event("PlannerAgent", f"Starting system planning phase for language: {language}")
         
         # Load lessons learned to avoid past mistakes
-        lessons = self.memory.load_lessons()
+        from settings import LLM_PROVIDER, TRIM_LOCAL_PROMPTS
+        if LLM_PROVIDER.lower() in ("local", "ollama") and TRIM_LOCAL_PROMPTS:
+            lessons = []
+        else:
+            lessons = self.memory.load_lessons()
+
         lessons_context = ""
         if lessons:
             lessons_context = "--- LESSONS LEARNED FROM PAST MISTAKES (AVOID THESE BUGS) ---\n"
@@ -25,6 +30,8 @@ class PlannerAgent:
             lessons_context += "\n"
             
         prompt = f"{lessons_context}User Requirements Description:\n{description}\n\n"
+        if failure_hint:
+            prompt += f"--- CRITICAL SYSTEM GUIDANCE ---\n{failure_hint}\n\n"
         if failure_context:
             prompt += f"--- CONTEXT: PREVIOUS ATTEMPTS FAILED ---\nBelow is the compilation/test trace of the failures. Please revise the architectural plan to fix these issues:\n{failure_context}\n\n"
         prompt += f"Generate the revised system plan JSON specifically tailored for {language.upper()}."

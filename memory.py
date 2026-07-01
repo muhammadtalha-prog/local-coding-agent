@@ -106,26 +106,9 @@ class MemoryAgent:
             stripped_chars = set(before_strip) - set(content)
             logger.warning(f"[MemoryAgent] Stripped non-ASCII chars from {filename}: {[hex(ord(c)) for c in stripped_chars]}")
 
-        # Convert Python-style comment lines or inline comments starting with '#' to MATLAB '%'
-        # while preserving '#' characters inside single-quoted strings.
-        lines = content.splitlines()
-        for idx, line in enumerate(lines):
-            if "#" in line:
-                new_chars = []
-                in_quote = False
-                for char in line:
-                    if char == "'":
-                        in_quote = not in_quote
-                    if char == "#" and not in_quote:
-                        new_chars.append("%")
-                    else:
-                        new_chars.append(char)
-                lines[idx] = "".join(new_chars)
-        content = "\n".join(lines)
-
-        # --- Step 2: Detect Python-in-MATLAB mismatch ---
-        # If the LLM generated Python syntax, replace with an error stub
-        # so the execution fails with a clear message instead of a cryptic parse error.
+        # --- Step 2: Detect Python-in-MATLAB mismatch (BEFORE # -> % conversion) ---
+        # This must run before the comment conversion below, otherwise Python-style
+        # '#' comments become valid MATLAB '%' comments and the detection is weakened.
         python_indicators = [
             r"^\s*def\s+[a-zA-Z_]",                     # Python function definition
             r"^\s*import\s+[a-zA-Z_]",                  # Python import
@@ -159,6 +142,24 @@ class MemoryAgent:
                 "MemoryAgent",
                 f"WARNING: Replaced Python-in-MATLAB content in {filename} with error stub."
             )
+            return content
+
+        # --- Step 3: Convert Python-style '#' comments to MATLAB '%' ---
+        # Only runs on content confirmed to be MATLAB (not replaced by stub above).
+        lines = content.splitlines()
+        for idx, line in enumerate(lines):
+            if "#" in line:
+                new_chars = []
+                in_quote = False
+                for char in line:
+                    if char == "'":
+                        in_quote = not in_quote
+                    if char == "#" and not in_quote:
+                        new_chars.append("%")
+                    else:
+                        new_chars.append(char)
+                lines[idx] = "".join(new_chars)
+        content = "\n".join(lines)
 
         return content
 
