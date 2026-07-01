@@ -1,3 +1,5 @@
+# filepath: sandbox/queue.py
+
 class Queue:
     """
     A Queue data structure class with enqueue, dequeue, and size methods.
