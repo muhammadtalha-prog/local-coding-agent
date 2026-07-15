@@ -41,6 +41,9 @@ def generate_code(plan: dict[str, Any]) -> tuple[Path, str]:
     # Sanity check: reject Python code masquerading as MATLAB
     _validate_matlab_syntax(code, file_name)
 
+    # Auto-correct plan's test_call to match actual generated signature
+    _fix_test_call(plan, code)
+
     # Write to sandbox
     out_path = SANDBOX_DIR / f"{file_name}.m"
     out_path.write_text(code, encoding="utf-8")
@@ -118,3 +121,59 @@ def _validate_matlab_syntax(code: str, file_name: str) -> None:
             "It may be a script — that is acceptable for simple tasks.",
             file_name,
         )
+
+
+def _fix_test_call(plan: dict[str, Any], code: str) -> None:
+    """
+    Parse the actual MATLAB function signature from the generated code and
+    correct plan['test_call'] so the argument count matches exactly.
+
+    Fixes the common LLM mistake of generating a test_call with fewer
+    arguments than the function actually requires.
+    """
+    func_name = plan["file_name"]
+
+    # Extract the function signature: function out = name(a, b, c, ...)
+    sig_match = re.search(
+        rf"function\s+.*?=\s*{re.escape(func_name)}\s*\(([^)]*)\)",
+        code,
+        flags=re.IGNORECASE,
+    )
+    if not sig_match:
+        return  # Can't parse — leave test_call as-is
+
+    # Get the real input parameter names from the signature
+    raw_params = sig_match.group(1).strip()
+    if not raw_params:
+        # No inputs — test_call should be: disp(func_name())
+        plan["test_call"] = f"disp({func_name}())"
+        logger.info("Fixed test_call: no inputs detected -> %s", plan["test_call"])
+        return
+
+    actual_params = [p.strip() for p in raw_params.split(",") if p.strip()]
+    n_actual = len(actual_params)
+
+    # Check how many args the current test_call passes
+    tc = plan.get("test_call", "")
+    tc_match = re.search(rf"{re.escape(func_name)}\s*\(([^)]*)\)", tc)
+    if tc_match:
+        tc_args_raw = tc_match.group(1).strip()
+        tc_args = [a.strip() for a in tc_args_raw.split(",") if a.strip()] if tc_args_raw else []
+        n_tc = len(tc_args)
+    else:
+        n_tc = 0
+
+    if n_tc == n_actual:
+        return  # Already correct
+
+    # Rebuild test_call with numeric placeholders (1, 2, 3 ...) for missing args
+    # Reuse existing args where possible, pad with incrementing numbers
+    existing = tc_args if tc_match else []
+    new_args = list(existing[:n_actual])  # keep what's there
+    for i in range(len(new_args), n_actual):
+        new_args.append(str(i + 1))  # pad with 1, 2, 3...
+
+    plan["test_call"] = f"disp({func_name}({', '.join(new_args)}))"
+    logger.info(
+        "Fixed test_call: %d->%d args -> %s", n_tc, n_actual, plan["test_call"]
+    )
