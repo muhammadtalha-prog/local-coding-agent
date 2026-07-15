@@ -1,25 +1,24 @@
 # Virtual Environment
 venv/
 env/
-.env
 *.pyc
 __pycache__/
 *.pyo
 
 # IDE/Editor
-.vscode/
 .idea/
 *.swp
 *.swo
 
 # Workspace & Generated Files
 workspace/
-task_history.json
-batch_results.json
-backup.zip
 scratch/
-gh.exe
 *.log
+agent.log
+
+# JSON files — plans are in-memory only, never persisted
+*.json
+!.vscode/settings.json
 
 # OS Files
 .DS_Store
@@ -33,18 +32,20 @@ desktop.ini
 *.key
 *.pem
 
-# MATLAB Generated
+# MATLAB Generated / Output files
 *.fig
-*.png
-*.jpg
+*.mat
 simulation_data.csv
 
-# Python
+# Python packaging
 *.egg-info/
 dist/
 build/
 *.whl
 
 # Temporary Agent Files
-.memory/
 sandbox/
+.memory/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

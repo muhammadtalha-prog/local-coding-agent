@@ -1,100 +1,158 @@
-# 🤖 Local Coding Agent - Secure Avionics Multi-Agent System
+# 🧮 MATLAB Code Generation Agent
 
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://python.org)
-[![vLLM](https://img.shields.io/badge/vLLM-Local%20Inference-orange.svg)](https://github.com/vllm-project/vllm)
+[![Ollama](https://img.shields.io/badge/Ollama-Local%20LLM-orange.svg)](https://ollama.com)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-An autonomous multi-agent developer assistant designed for secure local environments. The system plans, generates, lints, tests, and self-corrects code inside an isolated Virtual Machine (venv) sandbox, running entirely offline using **vLLM**.
+A lightweight local AI agent that **plans, generates, executes, and self-corrects MATLAB code** entirely on your machine using a small 1.5–3B language model via Ollama.
+
+Designed for constrained hardware — works on **8GB RAM** with no GPU required.
 
 ---
 
 ## ⚡ Key Features
 
-- 🖥️ **100% Local Inference & Execution** - Complete removal of external APIs (Gemini, Groq) to ensure security and zero cloud data leaks.
-- ⚙️ **vLLM Integration** - High-performance local LLM execution via OpenAI-compatible API servers.
-- 🛡️ **VM Sandbox Isolation** - Executes generated code and tests inside an isolated `venv` virtual machine workspace to protect the host device from unintended file modifications.
-- 📉 **Lag & Hang Prevention** - Strict resource constraints and child process tree cleanup (`taskkill` on Windows) prevent infinite loops or compile hangs from lagging your PC.
-- 🧩 **Specialized Agent Pipeline**:
-  - **Planning Agent**: Designs system architecture and safety contracts.
-  - **Coding Agent**: Translates plans into typed, production-ready code.
-  - **Testing Agent**: Writes comprehensive `pytest` suites.
-  - **Debugger Agent**: Corrects failures dynamically based on VM error trace logs.
-  - **Review Agent**: Performs DO-178C avionics safety/compliance audits.
-  - **Deploy Agent**: Rewrites code into user-interactive CLI prompts.
+- 🧠 **4-agent pipeline**: Planner → Coder → Executor → Debugger
+- 🔁 **Self-correcting**: Automatically fixes MATLAB errors (up to 3 retries)
+- 🚫 **No toolbox dependencies**: All algorithms implemented with base MATLAB only
+- 💾 **Low memory**: Only 3 Python packages required; model runs in ~2GB RAM
+- ⚡ **Fast**: No LangChain, no LiteLLM, no Docker — direct Ollama API calls
+- 📁 **Workspace output**: Verified `.m` files saved to `workspace/<name>/`
 
 ---
 
 ## 📋 Getting Started
 
-### 1. Installation
+### 1. Install Ollama
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/local-coding-agent.git
-cd local-coding-agent
+# Windows — download from https://ollama.com/download
+# Or via winget:
+winget install Ollama.Ollama
+```
+
+### 2. Pull a Model
+
+```bash
+# Recommended for 8GB RAM:
+ollama pull qwen2.5-coder:3b       # ~2.2GB — best balance
+ollama pull qwen2.5-coder:1.5b     # ~1.1GB — fastest, for very low RAM
+```
+
+### 3. Set Up the Project
+
+```bash
+# Clone / navigate to project
+cd "d:/Local coding agent"
 
 # Create virtual environment
 python -m venv venv
-.\venv\Scripts\activate  # Linux/Mac: source venv/bin/activate
+.\venv\Scripts\activate
 
-# Install dependencies
+# Install dependencies (only 3 packages!)
 pip install -r requirements.txt
 ```
 
-### 2. Configure Environment
+### 4. Configure (Optional)
 
-Copy `.env.template` to `.env` and set up the local vLLM settings:
 ```bash
 copy .env.template .env
-```
-Ensure your `.env` contains:
-```ini
-LLM_PROVIDER=vllm
-VLLM_API_BASE=http://localhost:8000/v1
-VLLM_MODEL=Qwen/Qwen2.5-Coder-7B-Instruct
+# Edit .env if your MATLAB is installed at a non-standard path
 ```
 
-### 3. Start local vLLM Server
+### 5. Run
 
-Run the startup helper script to launch the local OpenAI-compatible endpoint:
 ```bash
-# On Windows
-start_vllm.bat
-```
-Or start manually via CLI:
-```bash
-python -m vllm.entrypoints.openai.api_server --model Qwen/Qwen2.5-Coder-7B-Instruct --host 127.0.0.1 --port 8000
+# Single task
+python main.py --task "Generate a moving average filter function"
+
+# Interactive mode
+python main.py
+
+# Use a smaller model for faster generation
+python main.py --task "Create a sine wave generator" --model qwen2.5-coder:1.5b
 ```
 
-### 4. Run the Agent
+---
 
-Run the main agent CLI:
-```bash
-python cli.py -d "Create a rental property ticket management system with user authentication, ticket creation, assignment, and reporting. Include safety contracts for input validation and data integrity."
+## 📁 Project Structure
+
 ```
+d:/Local coding agent/
+├── main.py              # Entry point — orchestrates the pipeline
+├── config.py            # All settings (LLM, MATLAB paths, timeouts)
+├── agents/
+│   ├── llm_client.py    # Thin Ollama API client
+│   ├── planner.py       # JSON plan generator
+│   ├── coder.py         # MATLAB .m code generator
+│   ├── debugger.py      # Error-fix agent
+│   └── matlab_executor.py  # MATLAB subprocess runner
+├── sandbox/             # Temp workspace (generated code during pipeline)
+├── workspace/           # Output: verified .m files saved here
+├── .env                 # Your configuration (gitignored)
+├── .env.template        # Configuration template
+└── requirements.txt     # 3 packages only
+```
+
+---
+
+## 🔧 Configuration
+
+All settings live in `.env` (copy from `.env.template`):
+
+| Variable | Default | Description |
+|---|---|---|
+| `OLLAMA_MODEL` | `qwen2.5-coder:3b` | Model to use |
+| `OLLAMA_BASE_URL` | `http://localhost:11434/v1` | Ollama server URL |
+| `LLM_MAX_TOKENS` | `2048` | Max tokens per LLM call |
+| `LLM_TEMPERATURE` | `0.15` | Randomness (lower = more deterministic) |
+| `LLM_TIMEOUT_SEC` | `120.0` | Per-call LLM timeout |
+| `MATLAB_PATH` | auto-detected | Path to `matlab.exe` |
+| `MATLAB_EXEC_TIMEOUT_SEC` | `60.0` | MATLAB subprocess timeout |
+| `MAX_DEBUG_RETRIES` | `3` | Max debug loop iterations |
+| `AUTO_APPROVE` | `true` | Skip human approval before saving |
+
+---
+
+## 💻 Hardware Requirements
+
+| Component | Minimum | Recommended |
+|---|---|---|
+| RAM | 6GB | 8GB |
+| Storage | 5GB free | 10GB free |
+| CPU | 4 cores | 8 cores |
+| GPU | None needed | Optional (speeds up Ollama) |
+
+### Model RAM Usage (Q4 quantization)
+
+| Model | RAM | Notes |
+|---|---|---|
+| `qwen2.5-coder:1.5b` | ~1.1GB | Fastest, good for simple tasks |
+| `qwen2.5-coder:3b` | ~2.2GB | **Recommended** — best quality/speed |
+| `phi4-mini:3.8b` | ~2.5GB | Strong reasoning |
+| `qwen2.5-coder:7b` | ~4.5GB | Highest quality, tight on 8GB |
 
 ---
 
 ## ⚠️ Important Notes
 
-* **GPU Memory**: Ensure you have enough dedicated GPU memory for local model inference (e.g. ~8-10GB VRAM for Qwen2.5-Coder 7B).
-* **vLLM Must Be Running**: The CLI validates that the local vLLM endpoint is active before initiating the coordinator.
-* **VM Isolation**: All code checking (Ruff, Mypy) and execution checks (Pytest, python running) happen isolated inside `vm_sandbox/work/sandbox/` to prevent modifications to the parent workspace.
-* **Windows Paths**: The system implements proper Windows path handling throughout commands and directory setups.
+- **MATLAB is optional**: If not installed, the agent generates `.m` code and saves it — just without executing it
+- **No toolbox functions**: The agent is instructed to avoid all licensed MATLAB toolboxes. If a toolbox function is unavoidable, the pipeline will halt with a clear explanation
+- **Ollama must be running**: Start it with `ollama serve` before running the agent
 
 ---
 
-## 📁 Project Architecture
+## 📝 Example Output
 
-* `cli.py` - Core entry point; performs startup validations.
-* `head.py` - Main orchestrator managing the multi-agent execution pipeline.
-* `vm_manager.py` - Initializes and manages the virtual environment VM execution sandbox.
-* `llm.py` - Communicates with the local vLLM model.
-* `settings.py` - Safety parameters, system prompts, and folder configurations.
-* `coder.py` - Specialized code-generation agent.
-* `tester.py` - Specialized unit test suite generator.
-* `debugger.py` - Specialized self-correction agent.
-* `linter.py` - Runs Ruff and Mypy inside the sandbox.
-* `executor.py` - Runs test suites and programs inside the sandbox.
-* `review.py` - Safety reviewer and auditor.
-* `deploy.py` - Prepares verified code for interactive user deployment.
+```
+Task: Generate a moving average filter function
+
+✓  Plan ready: moving_average_filter.m
+✓  Code written to sandbox
+✓  Execution passed!
+✓  Saved to workspace:
+   📄 workspace/moving_average_filter/moving_average_filter.m
+   📋 workspace/moving_average_filter/moving_average_filter_plan.json
+
+Done in 18.4s
+```
