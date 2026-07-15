@@ -41,9 +41,9 @@ ollama pull qwen2.5-coder:1.5b     # ~1.1GB — fastest, for very low RAM
 
 ### 3. Set Up the Project
 
-```bash
+```powershell
 # Clone / navigate to project
-cd "d:/Local coding agent"
+cd "D:\Local coding agent"
 
 # Create virtual environment
 python -m venv venv
@@ -62,7 +62,7 @@ copy .env.template .env
 
 ### 5. Run
 
-```bash
+```powershell
 # Single task
 python main.py --task "Generate a moving average filter function"
 
@@ -71,6 +71,9 @@ python main.py
 
 # Use a smaller model for faster generation
 python main.py --task "Create a sine wave generator" --model qwen2.5-coder:1.5b
+
+# Override timeout and retries
+python main.py --task "Simulate a DC motor" --timeout 150 --retries 3
 ```
 
 ---
@@ -78,20 +81,20 @@ python main.py --task "Create a sine wave generator" --model qwen2.5-coder:1.5b
 ## 📁 Project Structure
 
 ```
-d:/Local coding agent/
-├── main.py              # Entry point — orchestrates the pipeline
-├── config.py            # All settings (LLM, MATLAB paths, timeouts)
+D:\Local coding agent\
+├── main.py                  # Entry point -- orchestrates the pipeline
+├── config.py                # All settings (LLM, MATLAB paths, timeouts)
 ├── agents/
-│   ├── llm_client.py    # Thin Ollama API client
-│   ├── planner.py       # JSON plan generator
-│   ├── coder.py         # MATLAB .m code generator
-│   ├── debugger.py      # Error-fix agent
-│   └── matlab_executor.py  # MATLAB subprocess runner
-├── sandbox/             # Temp workspace (generated code during pipeline)
-├── workspace/           # Output: verified .m files saved here
-├── .env                 # Your configuration (gitignored)
-├── .env.template        # Configuration template
-└── requirements.txt     # 3 packages only
+│   ├── llm_client.py        # Thin Ollama API client
+│   ├── planner.py           # JSON plan generator (in-memory only)
+│   ├── coder.py             # MATLAB .m code generator
+│   ├── debugger.py          # Error-fix agent
+│   └── matlab_executor.py   # MATLAB subprocess runner
+├── sandbox/                 # Temp workspace (code during pipeline, auto-cleaned)
+├── workspace/               # Output: verified .m files saved here
+├── .env                     # Your configuration (gitignored)
+├── .env.template            # Configuration template
+└── requirements.txt         # 3 packages only
 ```
 
 ---
@@ -108,7 +111,7 @@ All settings live in `.env` (copy from `.env.template`):
 | `LLM_TEMPERATURE` | `0.15` | Randomness (lower = more deterministic) |
 | `LLM_TIMEOUT_SEC` | `120.0` | Per-call LLM timeout |
 | `MATLAB_PATH` | auto-detected | Path to `matlab.exe` |
-| `MATLAB_EXEC_TIMEOUT_SEC` | `60.0` | MATLAB subprocess timeout |
+| `MATLAB_EXEC_TIMEOUT_SEC` | `120.0` | MATLAB subprocess timeout |
 | `MAX_DEBUG_RETRIES` | `3` | Max debug loop iterations |
 | `AUTO_APPROVE` | `true` | Skip human approval before saving |
 
@@ -147,12 +150,15 @@ All settings live in `.env` (copy from `.env.template`):
 ```
 Task: Generate a moving average filter function
 
-✓  Plan ready: moving_average_filter.m
-✓  Code written to sandbox
-✓  Execution passed!
-✓  Saved to workspace:
-   📄 workspace/moving_average_filter/moving_average_filter.m
-   📋 workspace/moving_average_filter/moving_average_filter_plan.json
+OK  Ollama OK -- model 'qwen2.5-coder:3b' is available.
+>> [1/3] Planner Agent: Designing MATLAB function...
+OK  Plan ready: moving_average_filter.m
+>> [2/3] Coder Agent: Generating MATLAB code...
+OK  Code written to sandbox: moving_average_filter.m
+>> [3/3] Executing & Verifying MATLAB code...
+OK  Execution passed!
+OK  Saved to workspace:
+   >> D:\Local coding agent\workspace\moving_average_filter\moving_average_filter.m
 
-Done in 18.4s
+DONE  in 34.7s
 ```
