@@ -51,6 +51,9 @@ MAX_DEBUG_RETRIES: int = int(os.getenv("MAX_DEBUG_RETRIES", "3"))
 # Timeout for each MATLAB subprocess execution (seconds)
 MATLAB_EXEC_TIMEOUT_SEC: float = float(os.getenv("MATLAB_EXEC_TIMEOUT_SEC", "120.0"))
 
+# Disable JVM to speed up MATLAB startup and save RAM (highly recommended on 8GB CPU systems)
+MATLAB_NO_JVM: bool = os.getenv("MATLAB_NO_JVM", "true").lower() in ("true", "1", "yes")
+
 # AutoApprove — skip human confirmation before saving to workspace
 AUTO_APPROVE: bool = os.getenv("AUTO_APPROVE", "true").lower() in ("true", "1", "yes")
 

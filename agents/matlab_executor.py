@@ -13,7 +13,7 @@ import logging
 from pathlib import Path
 from typing import Tuple
 
-from config import MATLAB_EXE, SANDBOX_DIR, MATLAB_EXEC_TIMEOUT_SEC
+from config import MATLAB_EXE, SANDBOX_DIR, MATLAB_EXEC_TIMEOUT_SEC, MATLAB_NO_JVM
 
 logger = logging.getLogger("matlab_agent.executor")
 
@@ -72,7 +72,10 @@ class MatlabExecutor:
             f"exit(0);"
         )
 
-        cmd = [MATLAB_EXE, "-batch", matlab_cmd]
+        cmd = [MATLAB_EXE]
+        if MATLAB_NO_JVM:
+            cmd.append("-nojvm")
+        cmd.extend(["-batch", matlab_cmd])
         logger.info("Running: %s", " ".join(cmd))
 
         try:
@@ -120,7 +123,10 @@ class MatlabExecutor:
             f"exit(0);"
         )
 
-        cmd = [MATLAB_EXE, "-batch", matlab_cmd]
+        cmd = [MATLAB_EXE]
+        if MATLAB_NO_JVM:
+            cmd.append("-nojvm")
+        cmd.extend(["-batch", matlab_cmd])
         logger.info("Test call: %s", test_call)
 
         try:

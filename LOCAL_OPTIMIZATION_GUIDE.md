@@ -1,85 +1,82 @@
-# 🚀 Local CPU-Optimized Ollama & VM Sandbox Optimization Guide
+# 🚀 Local CPU & RAM Optimization Guide for MATLAB Code Agent
 
-This guide details configuration settings, setup steps, and troubleshooting tips to run the coding agent using **Ollama** natively on Windows CPU without lags, hangs, or timeout crashes.
-
----
-
-## 🛠️ Step 1: Install & Set Up Ollama
-
-Ollama runs natively on Windows and automatically compiles models using CPU execution (llama.cpp) if no GPU is found.
-
-1. Download the Windows installer: [Ollama-Installer.exe](https://ollama.com/download/Ollama-Installer.exe).
-2. Double-click the installer and run through the setup wizard.
-3. Once completed, start the Ollama desktop application or run `ollama serve` in a terminal window.
+This guide details configuration settings and tuning strategies to run the MATLAB Code Agent smoothly on an **8GB RAM / 256GB SSD Windows CPU** environment using Ollama and native MATLAB.
 
 ---
 
-## 📦 Step 2: Pull the CPU-Optimized Model
+## 🛠️ Step 1: Optimize MATLAB Startup Latency (Major Speedup)
 
-To ensure fast local code generation on CPU without freezing your machine:
-* **Avoid large 7B/13B models** on low-VRAM CPU hosts, as they cause massive disk swapping and CPU lag.
-* **Use the 1.5B variant**: `qwen2.5-coder:1.5b` is highly capable, extremely fast, and has a tiny footprint.
+By default, MATLAB takes 30–60 seconds to launch because it initializes the entire Java Virtual Machine (JVM) desktop environment. 
 
-In a terminal, run:
-```powershell
-ollama pull qwen2.5-coder:1.5b
+### 1. JVM Bypass (`MATLAB_NO_JVM=true`)
+Since the agent works with numeric calculations, system simulations, and signal processing using base MATLAB functions, it **does not require the Java Virtual Machine**. 
+* The system is configured by default to run MATLAB with the `-nojvm` flag.
+* This drops execution startup latency from **30–60 seconds to less than 5 seconds**!
+
+### 2. Configure in `.env`
+You can control this behavior via your `.env` configuration file:
+```ini
+# Set to false if you are generating GUI-based MATLAB code (highly discouraged)
+MATLAB_NO_JVM=true
 ```
 
 ---
 
-## ⚙️ Step 3: Optimize Context Window & Threads (Anti-Lag Tuning)
+## 📦 Step 2: CPU-Optimized Ollama Tuning
 
-By default, large context windows take a long time to evaluate on CPU, which triggers HTTP client timeout errors. We can lock the context size and thread count.
+Running local models on 8GB RAM CPUs can freeze the system if the prompt evaluation threads consume 100% processing power.
 
-### 1. Create a custom Modelfile
-Create a file named `Modelfile` in the root workspace directory with the following contents:
+### 1. Model Selection Recommendation
+* **qwen2.5-coder:3b (Recommended default)**: Fits completely in ~2.2GB RAM. It is fast, highly intelligent, and generates extremely reliable MATLAB syntax.
+* **qwen2.5-coder:1.5b (Fastest)**: Fits in ~1.1GB RAM. Use this if your system is lagging heavily or you want near-instant response times.
+
+### 2. Configure Context Restraints (Anti-Timeout)
+Create a file named `Modelfile` in the root of this project:
 ```dockerfile
-# Modelfile
-FROM qwen2.5-coder:1.5b
+FROM qwen2.5-coder:3b
 
-# Restrict context window and output token sizes to keep CPU prefill fast
+# Restrict context windows to keep CPU prefill fast
 PARAMETER num_ctx 2048
 PARAMETER num_predict 1024
-PARAMETER temperature 0.1
+PARAMETER temperature 0.15
 ```
-
-### 2. Build the optimized model
-In a terminal, compile this custom model:
+Then build the optimized model:
 ```powershell
-ollama create cpu-integrity-coder -f ./Modelfile
+ollama create cpu-matlab-coder -f ./Modelfile
 ```
-
-### 3. Update your `.env` configuration
-In your `.env` file, change `OLLAMA_MODEL` to target your newly built optimized model:
+Update your `.env` to target this model:
 ```ini
-OLLAMA_MODEL=cpu-integrity-coder
+OLLAMA_MODEL=cpu-matlab-coder
 ```
 
-### 4. CPU Thread Allocation Override (Optional)
-If Ollama consumes 100% CPU and makes the Windows UI unresponsive:
+### 3. CPU Thread Allocation
+If Ollama makes your Windows UI lag or freeze:
 1. Open Windows System Environment Variables.
-2. Add a new User variable named **`OLLAMA_NUM_PARALLEL`** and set it to `1` (disables parallel request allocation to conserve threads).
-3. (Optional) Set the environment variable **`OMP_NUM_THREADS`** to match only the physical cores of your CPU (e.g., `4` or `6`), leaving background threads free for Windows tasks.
+2. Add a user variable named **`OLLAMA_NUM_PARALLEL`** and set it to `1` (prevents parallel requests from taking up CPU memory).
+3. Set the environment variable **`OMP_NUM_THREADS`** to match the number of physical cores of your CPU (e.g., `4` or `6`), leaving background threads free for normal Windows operations.
 
 ---
 
-## 🛡️ Step 4: Execution inside the VM Sandbox
+## 🛡️ Step 3: Run the Agent
 
-The agent framework implements strict virtualenv sandbox isolation for maximum safety:
-1. **Isolated Execution**: When running Python generation tasks, the code and test files are copied to `vm_sandbox/work/sandbox/` and executed using `vm_sandbox/venv` (which contains `pytest`, `ruff`, `mypy`).
-2. **Workspace Protection**: The parent workspace directory remains completely read-only for running code, preventing generated modules from corrupting, overwriting, or deleting project files.
-3. **Hang Prevention**: Subprocesses have strict timeouts. If a subprocess times out on Windows, a recursive `taskkill` immediately cleans up the process tree, keeping your device responsive.
+Always run the agent using the virtual environment to ensure the correct dependencies are used:
 
----
-
-## 🔧 Step 5: Troubleshooting
-
-### A. HTTP Timeout Errors
-* The agent has an increased HTTP client timeout of **`180.0` seconds** in `llm.py`. 
-* If you still see timeout errors, verify that `num_ctx` is set to `2048` or lower, or run `ollama serve` in a foreground command window to monitor processing speeds.
-
-### B. Verification
-To verify that the Ollama server is active and find your local models, run:
 ```powershell
-curl http://localhost:11434/api/tags
+# Direct activation alternative (bypasses script policies):
+& "D:\Local coding agent\venv\Scripts\python.exe" main.py --task "Your MATLAB task description"
 ```
+
+---
+
+## 🔍 Step 4: Troubleshooting
+
+### 1. MATLAB Timeout Errors
+* If MATLAB startup is still timing out, increase the timeout limit in your `.env` file:
+  ```ini
+  MATLAB_EXEC_TIMEOUT_SEC=180.0
+  ```
+* Timeouts are automatically detected by the runner and retried directly without wasting LLM calls.
+
+### 2. Missing Toolbox Warnings
+* The agent is instructed to write manual implementations of common toolbox functions (like DSP/Control filters).
+* If a missing toolbox function is called, the pipeline will identify it instantly, halt, and instruct you to rephrase the task to avoid it.
