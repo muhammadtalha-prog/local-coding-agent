@@ -45,6 +45,9 @@ ollama pull qwen2.5-coder:1.5b     # ~1.1GB — fastest, for very low RAM
 # Clone / navigate to project
 cd "D:\Local coding agent"
 
+# Fix PowerShell script execution policy (one-time, only if you see "running scripts is disabled")
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+
 # Create virtual environment
 python -m venv venv
 .\venv\Scripts\activate
@@ -52,6 +55,11 @@ python -m venv venv
 # Install dependencies (only 3 packages!)
 pip install -r requirements.txt
 ```
+
+> **Alternative (no activation needed):** Call the venv Python directly:
+> ```powershell
+> & "D:\Local coding agent\venv\Scripts\python.exe" main.py --task "your task here"
+> ```
 
 ### 4. Configure (Optional)
 
