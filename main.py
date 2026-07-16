@@ -39,6 +39,7 @@ from rich.text import Text
 # ── Project imports ──────────────────────────────────────────────────────────
 from config import (
     AUTO_APPROVE,
+    LLM_CONFIG,
     MAX_DEBUG_RETRIES,
     MATLAB_EXE,
     OLLAMA_MODEL,
@@ -58,6 +59,11 @@ logging.basicConfig(
     handlers=[logging.FileHandler(ROOT_DIR / "agent.log", encoding="utf-8")],
 )
 logger = logging.getLogger("matlab_agent.main")
+
+# Suppress AutoGen/OpenAI internal verbose output — we use Rich for UI
+logging.getLogger("autogen").setLevel(logging.ERROR)
+logging.getLogger("openai").setLevel(logging.ERROR)
+logging.getLogger("httpx").setLevel(logging.ERROR)
 
 console = Console()
 executor = MatlabExecutor()
@@ -276,6 +282,7 @@ Examples:
 def _print_banner() -> None:
     banner = Text()
     banner.append("  MATLAB Code Generation Agent  \n", style="bold cyan")
+    banner.append(f"  Framework: AutoGen / AG2 (multi-agent)\n", style="dim")
     banner.append(f"  Model : {OLLAMA_MODEL}\n",         style="dim")
     banner.append(f"  MATLAB: {MATLAB_EXE or 'not found (generation only)'}\n", style="dim")
     banner.append(f"  Output: {WORKSPACE_DIR}\n",        style="dim")

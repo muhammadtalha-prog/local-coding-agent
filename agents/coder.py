@@ -1,12 +1,13 @@
 """
-agents/coder.py — MATLAB Code Generator
+agents/coder.py — MATLAB Code Generator (AutoGen AssistantAgent)
 
-Takes a validated plan dict and generates a complete, executable MATLAB
-.m function file. Writes it directly to the sandbox directory.
+Uses an AG2 AssistantAgent backed by local Ollama to generate a complete,
+executable MATLAB .m function file from a validated plan dict.
+Writes the result directly to the sandbox directory.
 
-Key constraints for small (1.5-3B) models:
+Key constraints for small (1.5–3B) models:
   - Prompt includes ONLY what the model needs: plan summary + rules
-  - No full code history in context
+  - Single 1-turn chat per call to keep RAM usage low
   - Strict output: raw MATLAB code only
 """
 import logging
@@ -14,10 +15,28 @@ import re
 from pathlib import Path
 from typing import Any
 
-from config import CODER_SYSTEM_PROMPT, SANDBOX_DIR
-from agents.llm_client import call_llm
+from autogen import AssistantAgent, UserProxyAgent
+
+from config import CODER_SYSTEM_PROMPT, LLM_CONFIG, SANDBOX_DIR
 
 logger = logging.getLogger("matlab_agent.coder")
+
+# Suppress AutoGen internal verbose logging — we use Rich for UI
+logging.getLogger("autogen").setLevel(logging.ERROR)
+logging.getLogger("httpx").setLevel(logging.ERROR)
+logging.getLogger("openai").setLevel(logging.ERROR)
+
+
+def _quiet_chat(proxy, agent, message: str):
+    """1-turn chat with AutoGen stdout suppressed (no TERMINATING RUN noise)."""
+    import io, sys
+    _buf = sys.stdout
+    sys.stdout = io.StringIO()
+    try:
+        result = proxy.initiate_chat(agent, message=message, max_turns=1, silent=True)
+    finally:
+        sys.stdout = _buf
+    return result
 
 
 def generate_code(plan: dict[str, Any]) -> tuple[Path, str]:
@@ -35,7 +54,35 @@ def generate_code(plan: dict[str, Any]) -> tuple[Path, str]:
     logger.info("Generating MATLAB code for: %s.m", file_name)
 
     user_prompt = _build_prompt(plan)
-    raw = call_llm(user_prompt, system_prompt=CODER_SYSTEM_PROMPT)
+
+    # Create a fresh coder agent per call
+    coder = AssistantAgent(
+        name="CoderAgent",
+        system_message=CODER_SYSTEM_PROMPT,
+        llm_config=LLM_CONFIG,
+        max_consecutive_auto_reply=1,
+        human_input_mode="NEVER",
+        code_execution_config=False,
+    )
+
+    proxy = UserProxyAgent(
+        name="CoderProxy",
+        human_input_mode="NEVER",
+        max_consecutive_auto_reply=0,
+        llm_config=False,
+        code_execution_config=False,
+        is_termination_msg=lambda _: True,
+    )
+
+    try:
+        result = _quiet_chat(proxy, coder, user_prompt)
+        raw = _extract_last_reply(result)
+    except Exception as exc:
+        msg = str(exc).lower()
+        if "timeout" in msg or "timed out" in msg:
+            raise TimeoutError(f"Coder LLM call timed out: {exc}")
+        raise RuntimeError(f"Coder LLM call failed: {exc}") from exc
+
     code = _extract_code(raw)
 
     # Sanity check: reject Python code masquerading as MATLAB
@@ -50,6 +97,24 @@ def generate_code(plan: dict[str, Any]) -> tuple[Path, str]:
     logger.info("Wrote MATLAB code to: %s", out_path)
 
     return out_path, code
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Internal helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _extract_last_reply(result) -> str:
+    """Extract the last assistant message content from an AutoGen chat result."""
+    history = getattr(result, "chat_history", None)
+    if not history:
+        raise RuntimeError("CoderAgent returned no response.")
+
+    for msg in reversed(history):
+        content = msg.get("content", "")
+        if content and msg.get("name", "") not in ("CoderProxy",):
+            return content
+
+    raise RuntimeError("CoderAgent chat history contained no usable reply.")
 
 
 def _build_prompt(plan: dict[str, Any]) -> str:
@@ -83,11 +148,7 @@ def _build_prompt(plan: dict[str, Any]) -> str:
 
 
 def _extract_code(raw: str) -> str:
-    """
-    Extract raw MATLAB code from LLM response.
-    Strips markdown fences and leading/trailing whitespace.
-    """
-    # Remove markdown code fences
+    """Extract raw MATLAB code from LLM response — strips markdown fences."""
     raw = re.sub(r"```matlab\s*", "", raw, flags=re.IGNORECASE)
     raw = re.sub(r"```m\s*",      "", raw, flags=re.IGNORECASE)
     raw = re.sub(r"```\s*",       "", raw)
@@ -113,7 +174,6 @@ def _validate_matlab_syntax(code: str, file_name: str) -> None:
                 f"First 200 chars:\n{code[:200]}"
             )
 
-    # Verify the function header is present
     if not code.lstrip().lower().startswith("function"):
         logger.warning(
             "Generated code for %s.m does not start with 'function'. "
@@ -141,10 +201,8 @@ def _fix_test_call(plan: dict[str, Any], code: str) -> None:
     if not sig_match:
         return  # Can't parse — leave test_call as-is
 
-    # Get the real input parameter names from the signature
     raw_params = sig_match.group(1).strip()
     if not raw_params:
-        # No inputs — test_call should be: disp(func_name())
         plan["test_call"] = f"disp({func_name}())"
         logger.info("Fixed test_call: no inputs detected -> %s", plan["test_call"])
         return
@@ -152,7 +210,7 @@ def _fix_test_call(plan: dict[str, Any], code: str) -> None:
     actual_params = [p.strip() for p in raw_params.split(",") if p.strip()]
     n_actual = len(actual_params)
 
-    # Check how many args the current test_call passes
+    # Parse the existing test_call args with bracket/quote awareness
     tc = plan.get("test_call", "")
     func_start = tc.find(f"{func_name}(")
     if func_start != -1:
@@ -165,22 +223,17 @@ def _fix_test_call(plan: dict[str, Any], code: str) -> None:
                 paren_level += 1
             elif char == ")":
                 paren_level -= 1
-            
             if paren_level == 0:
                 tc_args_raw = tc[args_start:idx]
                 break
         else:
             tc_args_raw = tc[args_start:]
-        
-        tc_args_raw = tc_args_raw.strip()
-        # Parse arguments properly without splitting inside brackets/braces/quotes
-        tc_args = []
-        current_arg = []
-        bracket_level = 0
-        paren_level = 0
-        brace_level = 0
+
+        # Parse args without splitting inside brackets/braces/quotes
+        tc_args, current_arg = [], []
+        bracket_level = paren_level = brace_level = 0
         in_quote = False
-        for char in tc_args_raw:
+        for char in tc_args_raw.strip():
             if char == "'" and not in_quote:
                 in_quote = True
             elif char == "'" and in_quote:
@@ -192,36 +245,31 @@ def _fix_test_call(plan: dict[str, Any], code: str) -> None:
                 elif char == ")": paren_level -= 1
                 elif char == "{": brace_level += 1
                 elif char == "}": brace_level -= 1
-            
-            if char == "," and bracket_level == 0 and paren_level == 0 and brace_level == 0 and not in_quote:
+
+            if (char == "," and bracket_level == 0
+                    and paren_level == 0 and brace_level == 0 and not in_quote):
                 tc_args.append("".join(current_arg).strip())
                 current_arg = []
             else:
                 current_arg.append(char)
         if current_arg:
             tc_args.append("".join(current_arg).strip())
-        
-        # Filter out empty arguments
         tc_args = [a for a in tc_args if a]
         n_tc = len(tc_args)
     else:
-        tc_args = []
-        n_tc = 0
+        tc_args, n_tc = [], 0
 
     if n_tc == n_actual:
         return  # Already correct
 
-    # Rebuild test_call with placeholders for missing/mismatched args
-    # Reuse existing args where possible, pad with appropriate default values
-    new_args = list(tc_args[:n_actual])  # keep what's there
+    # Rebuild with type-aware defaults for missing args
+    new_args = list(tc_args[:n_actual])
     for i in range(len(new_args), n_actual):
-        # Determine fallback value: check if the planner has input info
         input_desc = ""
         inputs = plan.get("inputs", [])
         if i < len(inputs):
             input_desc = (inputs[i].get("type", "") + " " + inputs[i].get("description", "")).lower()
-        
-        # Smart defaults based on input description or type
+
         if "string" in input_desc or "char" in input_desc:
             fallback = "'test'"
         elif "matrix" in input_desc or "vector" in input_desc or "array" in input_desc:
@@ -231,6 +279,4 @@ def _fix_test_call(plan: dict[str, Any], code: str) -> None:
         new_args.append(fallback)
 
     plan["test_call"] = f"disp({func_name}({', '.join(new_args)}))"
-    logger.info(
-        "Fixed test_call: %d->%d args -> %s", n_tc, n_actual, plan["test_call"]
-    )
+    logger.info("Fixed test_call: %d->%d args -> %s", n_tc, n_actual, plan["test_call"])

@@ -124,6 +124,25 @@ def find_matlab() -> str | None:
 MATLAB_EXE: str | None = find_matlab()
 
 # ---------------------------------------------------------------------------
+# AutoGen / AG2 LLM Config  (Ollama via OpenAI-compatible API)
+# ---------------------------------------------------------------------------
+# This config is used by all AutoGen AssistantAgents (Planner, Coder, Debugger).
+# Agents run sequentially — never in parallel — to keep RAM under control.
+LLM_CONFIG: dict = {
+    "config_list": [
+        {
+            "model": OLLAMA_MODEL,
+            "base_url": OLLAMA_BASE_URL,
+            "api_key": "ollama",      # Ollama ignores this but AutoGen requires it
+            "price": [0, 0],          # Suppress AutoGen's 'model cost unknown' warning
+        }
+    ],
+    "cache_seed": None,               # Disable response caching (always fresh LLM calls)
+    "temperature": LLM_TEMPERATURE,
+    "max_tokens": LLM_MAX_TOKENS,
+}
+
+# ---------------------------------------------------------------------------
 # System Prompts  (kept short — every token counts with a 3B model)
 # ---------------------------------------------------------------------------
 
