@@ -12,12 +12,12 @@ Designed for constrained hardware — works on **8GB RAM** with no GPU required.
 
 ## ⚡ Key Features
 
-- 🧠 **4-agent pipeline**: Planner → Coder → Executor → Debugger
-- 🔁 **Self-correcting**: Automatically fixes MATLAB errors (up to 3 retries)
-- 🚫 **No toolbox dependencies**: All algorithms implemented with base MATLAB only
-- 💾 **Low memory**: Only 3 Python packages required; model runs in ~2GB RAM
-- ⚡ **Fast**: No LangChain, no LiteLLM, no Docker — direct Ollama API calls
-- 📁 **Workspace output**: Verified `.m` files saved to `workspace/<name>/`
+- 🧠 **AutoGen / AG2 Framework**: Orchestrated via ConversableAgents (Planner, Coder, Debugger) and a UserProxyAgent (Executor).
+- 🔁 **Self-correcting**: Automatically fixes MATLAB errors (up to 3 retries) using the Debugger agent.
+- 🗣️ **Graceful Input Fallbacks**: Generated code checks `nargin` and prompts the user using `input()` for missing inputs rather than crashing with an error.
+- 🚫 **No toolbox dependencies**: All algorithms implemented with base MATLAB only.
+- 💾 **Low memory**: Runs on **8GB RAM** CPU environments by maintaining sequential, cached-disabled local agent steps.
+- 📁 **Workspace output**: Verified `.m` files saved to `workspace/<name>/`.
 
 ---
 
@@ -90,19 +90,19 @@ python main.py --task "Simulate a DC motor" --timeout 150 --retries 3
 
 ```
 D:\Local coding agent\
-├── main.py                  # Entry point -- orchestrates the pipeline
-├── config.py                # All settings (LLM, MATLAB paths, timeouts)
+├── main.py                  # Entry point -- orchestrates the AutoGen pipeline
+├── config.py                # All settings (LLM, MATLAB paths, timeouts, LLM_CONFIG)
 ├── agents/
-│   ├── llm_client.py        # Thin Ollama API client
-│   ├── planner.py           # JSON plan generator (in-memory only)
-│   ├── coder.py             # MATLAB .m code generator
-│   ├── debugger.py          # Error-fix agent
-│   └── matlab_executor.py   # MATLAB subprocess runner
+│   ├── llm_client.py        # Ollama health check utility
+│   ├── planner.py           # AutoGen PlannerAgent (JSON plan generator)
+│   ├── coder.py             # AutoGen CoderAgent (MATLAB .m code generator)
+│   ├── debugger.py          # AutoGen DebuggerAgent (Error-fix agent)
+│   └── matlab_executor.py   # MATLAB executor & tool functions
 ├── sandbox/                 # Temp workspace (code during pipeline, auto-cleaned)
 ├── workspace/               # Output: verified .m files saved here
 ├── .env                     # Your configuration (gitignored)
 ├── .env.template            # Configuration template
-└── requirements.txt         # 3 packages only
+└── requirements.txt         # Package dependencies (including ag2[openai])
 ```
 
 ---
