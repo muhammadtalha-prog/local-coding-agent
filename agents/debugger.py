@@ -40,6 +40,7 @@ def fix_code(
     """
     file_name = plan["file_name"]
     logger.info("Debugging %s.m — error length: %d chars", file_name, len(error_output))
+    logger.info("Error output passed to debugger:\n%s", error_output)
 
     # Check for toolbox errors before even calling the LLM
     if MatlabExecutor.is_toolbox_error(error_output):

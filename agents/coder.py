@@ -153,8 +153,85 @@ def _fix_test_call(plan: dict[str, Any], code: str) -> None:
     actual_params = [p.strip() for p in raw_params.split(",") if p.strip()]
     n_actual = len(actual_params)
 
-    # To guarantee syntactical correctness, generate clean, safe test inputs
-    # using a simple [1, 2] vector for all parameters (safe for both scalars & vectors)
-    new_args = ["[1, 2]"] * n_actual
+    # Check how many args the current test_call passes
+    tc = plan.get("test_call", "")
+    func_start = tc.find(f"{func_name}(")
+    if func_start != -1:
+        args_start = func_start + len(func_name) + 1
+        paren_level = 1
+        tc_args_raw = ""
+        for idx in range(args_start, len(tc)):
+            char = tc[idx]
+            if char == "(":
+                paren_level += 1
+            elif char == ")":
+                paren_level -= 1
+            
+            if paren_level == 0:
+                tc_args_raw = tc[args_start:idx]
+                break
+        else:
+            tc_args_raw = tc[args_start:]
+        
+        tc_args_raw = tc_args_raw.strip()
+        # Parse arguments properly without splitting inside brackets/braces/quotes
+        tc_args = []
+        current_arg = []
+        bracket_level = 0
+        paren_level = 0
+        brace_level = 0
+        in_quote = False
+        for char in tc_args_raw:
+            if char == "'" and not in_quote:
+                in_quote = True
+            elif char == "'" and in_quote:
+                in_quote = False
+            elif not in_quote:
+                if char == "[": bracket_level += 1
+                elif char == "]": bracket_level -= 1
+                elif char == "(": paren_level += 1
+                elif char == ")": paren_level -= 1
+                elif char == "{": brace_level += 1
+                elif char == "}": brace_level -= 1
+            
+            if char == "," and bracket_level == 0 and paren_level == 0 and brace_level == 0 and not in_quote:
+                tc_args.append("".join(current_arg).strip())
+                current_arg = []
+            else:
+                current_arg.append(char)
+        if current_arg:
+            tc_args.append("".join(current_arg).strip())
+        
+        # Filter out empty arguments
+        tc_args = [a for a in tc_args if a]
+        n_tc = len(tc_args)
+    else:
+        tc_args = []
+        n_tc = 0
+
+    if n_tc == n_actual:
+        return  # Already correct
+
+    # Rebuild test_call with placeholders for missing/mismatched args
+    # Reuse existing args where possible, pad with appropriate default values
+    new_args = list(tc_args[:n_actual])  # keep what's there
+    for i in range(len(new_args), n_actual):
+        # Determine fallback value: check if the planner has input info
+        input_desc = ""
+        inputs = plan.get("inputs", [])
+        if i < len(inputs):
+            input_desc = (inputs[i].get("type", "") + " " + inputs[i].get("description", "")).lower()
+        
+        # Smart defaults based on input description or type
+        if "string" in input_desc or "char" in input_desc:
+            fallback = "'test'"
+        elif "matrix" in input_desc or "vector" in input_desc or "array" in input_desc:
+            fallback = "[1, 2]"
+        else:
+            fallback = "1"
+        new_args.append(fallback)
+
     plan["test_call"] = f"disp({func_name}({', '.join(new_args)}))"
-    logger.info("Fixed test_call with safe inputs: %s", plan["test_call"])
+    logger.info(
+        "Fixed test_call: %d->%d args -> %s", n_tc, n_actual, plan["test_call"]
+    )

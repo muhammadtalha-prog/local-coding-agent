@@ -156,6 +156,7 @@ Rules:
 - The FIRST LINE must be: function <outputs> = <file_name>(<inputs>)
 - The function name MUST exactly match the file_name from the plan.
 - Use ONLY base MATLAB — no licensed toolboxes (no butter, filtfilt, freqz, tf, lsim, ss, bode, step, nyquist).
+- NEVER use the input() function to interactively prompt for inputs. Handle missing/invalid arguments using validation or default values.
 - Comments use % prefix. No Python syntax (no def, import, class, #, colons at line ends).
 - All variable names and comments in plain ASCII — no Greek letters or math symbols.
 - Add input validation using error() for invalid inputs.
@@ -169,6 +170,7 @@ Rules:
 - Output ONLY the corrected raw MATLAB code. No markdown, no explanation.
 - The FIRST LINE must be: function <outputs> = <function_name>(<inputs>)
 - Fix ALL errors shown. Do not introduce new bugs.
+- NEVER use the input() function to interactively prompt for inputs.
 - Never use licensed toolboxes (no butter, filtfilt, freqz, tf, lsim, ss).
 - If the error mentions a toolbox function, replace it with a manual implementation.
 - Keep comments in plain ASCII only.

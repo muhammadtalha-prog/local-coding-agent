@@ -135,30 +135,35 @@ def run_pipeline(task: str) -> bool:
             progress.add_task(label, total=None)
             exec_ok, exec_out = executor.execute_file(matlab_file)
 
+        error_output = exec_out
+
         if exec_ok or "MATLAB_NOT_INSTALLED" in exec_out:
-            success = True
-            console.print(f"[green]OK  Execution passed![/green]")
-            if exec_out.strip() and "MATLAB_NOT_INSTALLED" not in exec_out:
-                # Show last 300 chars of output
-                preview = exec_out[-300:].strip()
-                console.print(Panel(preview, title="MATLAB Output", border_style="green"))
+            if "MATLAB_NOT_INSTALLED" in exec_out:
+                success = True
+                console.print(f"[green]OK  MATLAB not installed. Skipping test validation.[/green]")
+                break
 
             # Run test_call if MATLAB is available
+            test_ok = True
+            test_out = ""
             if MATLAB_EXE and plan.get("test_call"):
                 console.print(f"\n[yellow]  ▶  Running test call: [code]{plan['test_call']}[/code][/yellow]")
                 test_ok, test_out = executor.run_test_call(plan["file_name"], plan["test_call"])
-                if test_ok:
-                    console.print(f"[green]  OK  Test call passed![/green]")
-                    preview = test_out[-200:].strip()
-                    if preview:
-                        console.print(f"  [dim]{preview}[/dim]")
-                else:
-                    console.print(f"[yellow]  ⚠  Test call failed (non-critical):[/yellow]\n  {test_out[-200:]}")
 
-            break
+            if test_ok:
+                success = True
+                console.print(f"[green]OK  Execution & Test call passed![/green]")
+                if test_out.strip():
+                    preview = test_out[-300:].strip()
+                    console.print(Panel(preview, title="MATLAB Output", border_style="green"))
+                break
+            else:
+                console.print(f"[red]FAIL  Test call failed: {plan['test_call']}[/red]")
+                # Capture the test call error in error_output to pass to the debugger
+                error_output = f"ERROR: Test call '{plan['test_call']}' failed with:\n{test_out}"
 
         # Check error type — only toolbox errors are immediately fatal
-        is_timeout = "timed out" in exec_out.lower() or "ERROR: MATLAB timed out" in exec_out
+        is_timeout = "timed out" in error_output.lower() or "ERROR: MATLAB timed out" in error_output
         if is_timeout:
             console.print(
                 "[yellow]  >> MATLAB startup/execution timed out.\n"
@@ -168,7 +173,7 @@ def run_pipeline(task: str) -> bool:
             # Timeout is retriable — don't call debugger, just re-run
             continue
 
-        if MatlabExecutor.is_toolbox_error(exec_out):
+        if MatlabExecutor.is_toolbox_error(error_output):
             console.print(
                 "[bold red]FAIL  Toolbox function detected - cannot fix without a licensed MATLAB toolbox.[/bold red]\n"
                 "[yellow]  Hint: Rephrase your task to avoid: butter, filtfilt, tf, lsim, ss, bode, step[/yellow]"

@@ -180,7 +180,12 @@ class MatlabExecutor:
         }
         lower = error_output.lower()
         for fn in toolbox_funcs:
-            if f"undefined function '{fn}'" in lower:
+            # Match standard undefined function or variable errors for the given function name
+            if f"'{fn}'" in lower and (
+                "undefined function" in lower
+                or "undefined variable" in lower
+                or "not found" in lower
+            ):
                 return True
         return False
 
