@@ -6,16 +6,18 @@ Designed for 8GB RAM systems:
   - Windows taskkill terminates the full process tree on timeout
   - No Docker overhead
 """
-import asyncio
+import re
 import subprocess
 import sys
 import logging
 from pathlib import Path
-from typing import Tuple
 
 from config import MATLAB_EXE, SANDBOX_DIR, MATLAB_EXEC_TIMEOUT_SEC, MATLAB_NO_JVM
 
 logger = logging.getLogger("matlab_agent.executor")
+
+# Characters allowed in a MATLAB test_call expression (allowlist sanitization)
+_SAFE_TEST_CALL_RE = re.compile(r"^[a-zA-Z0-9_.,; @\[\]{}()'+\-*/^%~=<>!&|:\\\n\r\t ]+$")
 
 
 class MatlabExecutor:
@@ -36,7 +38,7 @@ class MatlabExecutor:
     # Public API
     # ------------------------------------------------------------------
 
-    def execute_file(self, matlab_file: Path) -> Tuple[bool, str]:
+    def execute_file(self, matlab_file: Path) -> tuple[bool, str]:
         """
         Synchronously execute a MATLAB .m file.
         Returns (success, combined_stdout_stderr).
@@ -92,7 +94,7 @@ class MatlabExecutor:
             success = result.returncode == 0
             return success, combined
 
-        except subprocess.TimeoutExpired as e:
+        except subprocess.TimeoutExpired:
             self._kill_matlab()
             return False, f"ERROR: MATLAB timed out after {self.timeout}s."
 
@@ -105,13 +107,19 @@ class MatlabExecutor:
         except Exception as exc:
             return False, f"ERROR: Unexpected error running MATLAB: {exc}"
 
-    def run_test_call(self, func_name: str, test_call: str) -> Tuple[bool, str]:
+    def run_test_call(self, func_name: str, test_call: str) -> tuple[bool, str]:
         """
         Execute a single MATLAB test expression (e.g. 'disp(my_func(1,2))').
         Used to verify the generated function produces output without crashing.
         """
         if MATLAB_EXE is None:
             return True, "MATLAB_NOT_INSTALLED: Skipping test call verification."
+
+        # Security: sanitize test_call to prevent command injection before
+        # embedding it directly into the MATLAB -batch string
+        if not _SAFE_TEST_CALL_RE.match(test_call):
+            logger.warning("test_call contains unsafe characters — rejecting: %s", test_call)
+            return False, "ERROR: test_call contains unsafe characters and was rejected."
 
         safe_dir = str(self.work_dir).replace("\\", "/")
         matlab_cmd = (
@@ -188,16 +196,3 @@ class MatlabExecutor:
             ):
                 return True
         return False
-
-    @staticmethod
-    def is_syntax_error(error_output: str) -> bool:
-        """Returns True if the output suggests Python code was generated instead of MATLAB."""
-        python_indicators = [
-            "invalid text character",
-            "def ",
-            "import ",
-            "from ",
-            "stub: llm generated",
-        ]
-        lower = error_output.lower()
-        return any(ind in lower for ind in python_indicators)

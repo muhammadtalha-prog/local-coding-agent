@@ -114,8 +114,7 @@ def _validate_matlab_syntax(code: str, file_name: str) -> None:
             )
 
     # Verify the function header is present
-    expected_func = f"function"
-    if not code.lstrip().lower().startswith(expected_func):
+    if not code.lstrip().lower().startswith("function"):
         logger.warning(
             "Generated code for %s.m does not start with 'function'. "
             "It may be a script — that is acceptable for simple tasks.",

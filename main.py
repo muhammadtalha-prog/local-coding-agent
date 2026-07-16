@@ -43,10 +43,9 @@ from config import (
     MATLAB_EXE,
     OLLAMA_MODEL,
     ROOT_DIR,
-    SANDBOX_DIR,
     WORKSPACE_DIR,
 )
-from agents.llm_client import call_llm, check_ollama_health
+from agents.llm_client import check_ollama_health
 from agents.planner import generate_plan
 from agents.coder import generate_code
 from agents.debugger import fix_code

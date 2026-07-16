@@ -7,10 +7,10 @@ call. No fallback cascade — we target one local model. Fast and simple.
 For 8GB RAM: keeps a single persistent session to avoid SSL handshake overhead.
 """
 import logging
+import re
 import time
 import json
 import requests
-from typing import Iterator
 
 from config import (
     OLLAMA_BASE_URL,
@@ -25,6 +25,9 @@ logger = logging.getLogger("matlab_agent.llm")
 # One persistent session for connection reuse (lower latency per call)
 _session = requests.Session()
 _session.headers.update({"Content-Type": "application/json"})
+
+# Regex to strip DeepSeek-style <think>...</think> reasoning blocks
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 
 def call_llm(
@@ -87,8 +90,7 @@ def call_llm(
         raise RuntimeError(f"Unexpected Ollama response format: {data}") from e
 
     # Strip DeepSeek-style <think>...</think> blocks if present
-    import re
-    content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+    content = _THINK_RE.sub("", content).strip()
 
     logger.info("LLM call completed in %.1fs (%d chars)", elapsed, len(content))
     return content
