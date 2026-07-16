@@ -134,6 +134,14 @@ def run_pipeline(task: str) -> bool:
             )
 
         # Execute
+        if not AUTO_APPROVE:
+            console.print(f"\n[bold yellow]⚠️  AUTO_APPROVE is false. Execution authorization required.[/bold yellow]")
+            console.print(f"File to execute: [cyan]{matlab_file.resolve()}[/cyan]")
+            ans = console.input("[bold yellow]Do you want to run this MATLAB code? (y/N): [/bold yellow]").strip().lower()
+            if ans not in ("y", "yes"):
+                console.print("[red]Execution aborted by user. Exiting pipeline.[/red]")
+                return False
+
         with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
                       transient=True, console=console) as progress:
             label = "Running matlab -batch..." if attempt == 0 else "Re-running after fix..."
@@ -152,6 +160,13 @@ def run_pipeline(task: str) -> bool:
             test_ok = True
             test_out = ""
             if MATLAB_EXE and plan.get("test_call"):
+                if not AUTO_APPROVE:
+                    console.print(f"\n[bold yellow]⚠️  AUTO_APPROVE is false. Test call authorization required.[/bold yellow]")
+                    console.print(f"Test call command: [cyan]{plan['test_call']}[/cyan]")
+                    ans = console.input("[bold yellow]Do you want to execute this test call? (y/N): [/bold yellow]").strip().lower()
+                    if ans not in ("y", "yes"):
+                        console.print("[red]Test call execution aborted by user. Exiting pipeline.[/red]")
+                        return False
                 console.print(f"\n[yellow]  ▶  Running test call: [code]{plan['test_call']}[/code][/yellow]")
                 test_ok, test_out = executor.run_test_call(plan["file_name"], plan["test_call"])
 

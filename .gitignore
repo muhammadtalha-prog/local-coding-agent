@@ -28,6 +28,7 @@ desktop.ini
 # API Keys (CRITICAL - NEVER UPLOAD)
 .env
 .env*
+!.env.template
 .env.local.backup
 *.key
 *.pem

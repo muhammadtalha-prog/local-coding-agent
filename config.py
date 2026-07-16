@@ -55,7 +55,7 @@ MATLAB_EXEC_TIMEOUT_SEC: float = float(os.getenv("MATLAB_EXEC_TIMEOUT_SEC", "120
 MATLAB_NO_JVM: bool = os.getenv("MATLAB_NO_JVM", "true").lower() in ("true", "1", "yes")
 
 # AutoApprove — skip human confirmation before saving to workspace
-AUTO_APPROVE: bool = os.getenv("AUTO_APPROVE", "true").lower() in ("true", "1", "yes")
+AUTO_APPROVE: bool = os.getenv("AUTO_APPROVE", "false").lower() in ("true", "1", "yes")
 
 # ---------------------------------------------------------------------------
 # MATLAB Executable Discovery
@@ -65,8 +65,8 @@ def find_matlab() -> str | None:
     Returns the full path to the matlab executable, or None if not found.
     Search order:
       1. MATLAB_PATH env var
-      2. Known user install paths on D: / C:
-      3. Program Files scan (all drives, all R20XX versions)
+      2. Known user install paths on Windows / macOS / Linux
+      3. Program Files / Applications / usr directory scan
       4. PATH (shutil.which)
     Result is cached after first call.
     """
@@ -82,20 +82,36 @@ def find_matlab() -> str | None:
         find_matlab._cache = env_override
         return env_override
 
-    # 2. Known common paths
-    for kp in [
+    # 2. Known common paths across OSs
+    known_paths = [
         Path("D:/Matlab/install/bin/matlab.exe"),
         Path("D:/Matlab/bin/matlab.exe"),
         Path("D:/MATLAB/bin/matlab.exe"),
         Path("C:/Program Files/MATLAB/R2024b/bin/matlab.exe"),
         Path("C:/Program Files/MATLAB/R2024a/bin/matlab.exe"),
         Path("C:/Program Files/MATLAB/R2023b/bin/matlab.exe"),
-    ]:
+    ]
+
+    # Add Linux and macOS standard paths
+    if sys.platform == "darwin":
+        # macOS applications directory scans
+        app_dir = Path("/Applications")
+        if app_dir.exists():
+            for app in app_dir.glob("MATLAB_R*.app"):
+                known_paths.append(app / "bin" / "matlab")
+    elif sys.platform.startswith("linux"):
+        # Linux standard installs
+        matlab_dir = Path("/usr/local/MATLAB")
+        if matlab_dir.exists():
+            for folder in matlab_dir.glob("R*"):
+                known_paths.append(folder / "bin" / "matlab")
+
+    for kp in known_paths:
         if _exists(kp):
             find_matlab._cache = str(kp)
             return find_matlab._cache
 
-    # 3. Program Files scan
+    # 3. Wildcard / directory scan if not matched in common list
     if sys.platform.startswith("win"):
         import re as _re
         ver_re = _re.compile(r"^R?20\d{2}[ab]?$", _re.IGNORECASE)
@@ -122,6 +138,7 @@ def find_matlab() -> str | None:
 
 
 MATLAB_EXE: str | None = find_matlab()
+
 
 # ---------------------------------------------------------------------------
 # AutoGen / AG2 LLM Config  (Ollama via OpenAI-compatible API)
