@@ -230,8 +230,10 @@ def _fix_test_call(plan: dict[str, Any], code: str) -> None:
             tc_args_raw = tc[args_start:]
 
         # Parse args without splitting inside brackets/braces/quotes
+        # NOTE: Use distinct variable names (inner_*) to avoid shadowing the
+        # outer `paren_level` used above to locate the closing paren of the call.
         tc_args, current_arg = [], []
-        bracket_level = paren_level = brace_level = 0
+        inner_bracket = inner_paren = inner_brace = 0
         in_quote = False
         for char in tc_args_raw.strip():
             if char == "'" and not in_quote:
@@ -239,15 +241,15 @@ def _fix_test_call(plan: dict[str, Any], code: str) -> None:
             elif char == "'" and in_quote:
                 in_quote = False
             elif not in_quote:
-                if char == "[": bracket_level += 1
-                elif char == "]": bracket_level -= 1
-                elif char == "(": paren_level += 1
-                elif char == ")": paren_level -= 1
-                elif char == "{": brace_level += 1
-                elif char == "}": brace_level -= 1
+                if char == "[": inner_bracket += 1
+                elif char == "]": inner_bracket -= 1
+                elif char == "(": inner_paren += 1
+                elif char == ")": inner_paren -= 1
+                elif char == "{": inner_brace += 1
+                elif char == "}": inner_brace -= 1
 
-            if (char == "," and bracket_level == 0
-                    and paren_level == 0 and brace_level == 0 and not in_quote):
+            if (char == "," and inner_bracket == 0
+                    and inner_paren == 0 and inner_brace == 0 and not in_quote):
                 tc_args.append("".join(current_arg).strip())
                 current_arg = []
             else:

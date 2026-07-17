@@ -30,6 +30,26 @@ if sys.platform.startswith("win"):
     sys.stdout = _io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
     sys.stderr = _io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
+# ── Early CLI pre-parse — MUST happen before config is imported ───────────────
+# config.py evaluates LLM_CONFIG, MAX_DEBUG_RETRIES etc. at import time from
+# os.environ.  If we wait until main() to apply overrides, those constants are
+# already frozen and the --model / --retries / --timeout flags do nothing.
+def _apply_early_env_overrides() -> None:
+    """Parse only the override flags and patch os.environ before config import."""
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("--model", "-m", default=None)
+    pre.add_argument("--retries", "-r", type=int, default=None)
+    pre.add_argument("--timeout", type=float, default=None)
+    known, _ = pre.parse_known_args()
+    if known.model:
+        os.environ["OLLAMA_MODEL"] = known.model
+    if known.retries is not None:
+        os.environ["MAX_DEBUG_RETRIES"] = str(known.retries)
+    if known.timeout is not None:
+        os.environ["MATLAB_EXEC_TIMEOUT_SEC"] = str(known.timeout)
+
+_apply_early_env_overrides()
+
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
@@ -307,14 +327,8 @@ def _print_banner() -> None:
 def main() -> None:
     """Main entry point — handles both CLI and interactive modes."""
     args = _parse_args()
-
-    # Apply CLI overrides to environment (config.py reads from os.environ)
-    if args.model:
-        os.environ["OLLAMA_MODEL"] = args.model
-    if args.retries is not None:
-        os.environ["MAX_DEBUG_RETRIES"] = str(args.retries)
-    if args.timeout is not None:
-        os.environ["MATLAB_EXEC_TIMEOUT_SEC"] = str(args.timeout)
+    # Note: env overrides were already applied in _apply_early_env_overrides()
+    # (called at module load, before config import). No need to re-set here.
 
     _print_banner()
 

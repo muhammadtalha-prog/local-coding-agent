@@ -119,8 +119,11 @@ def fix_code(
 
     # Validate it's actually MATLAB and not Python
     if _is_python_code(fixed_code):
-        logger.warning("Debugger returned Python code — keeping original and flagging error.")
-        return True, SANDBOX_DIR / f"{file_name}.m", current_code
+        logger.error(
+            "Debugger returned Python code instead of MATLAB — halting pipeline. "
+            "This is unfixable without manual intervention."
+        )
+        return False, SANDBOX_DIR / f"{file_name}.m", current_code
 
     # Write fixed code to sandbox
     out_path = SANDBOX_DIR / f"{file_name}.m"

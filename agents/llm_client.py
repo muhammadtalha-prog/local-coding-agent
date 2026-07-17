@@ -7,6 +7,7 @@ Ollama is reachable before starting the pipeline.
 """
 import logging
 import requests
+from urllib.parse import urlparse
 
 from config import OLLAMA_BASE_URL, OLLAMA_MODEL
 
@@ -23,8 +24,11 @@ def check_ollama_health(model: str = OLLAMA_MODEL) -> tuple[bool, str]:
     Returns (ok: bool, message: str).
     """
     try:
-        # Use the Ollama native /api/tags endpoint (always available)
-        tags_url = OLLAMA_BASE_URL.replace("/v1", "") + "/api/tags"
+        # Derive the Ollama base host from OLLAMA_BASE_URL using urlparse.
+        # This safely handles any path suffix (e.g. /v1, /ollama/v1, or none).
+        parsed = urlparse(OLLAMA_BASE_URL)
+        base_host = f"{parsed.scheme}://{parsed.netloc}"
+        tags_url = base_host + "/api/tags"
         resp = _session.get(tags_url, timeout=5)
         resp.raise_for_status()
         data = resp.json()
