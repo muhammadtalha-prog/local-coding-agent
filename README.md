@@ -43,7 +43,7 @@ ollama pull qwen2.5-coder:1.5b     # ~1.1GB — fastest, for very low RAM
 
 ```powershell
 # Clone / navigate to project
-cd "D:\Local coding agent"
+cd "D:\MatLab coding agent"
 
 # Fix PowerShell script execution policy (one-time, only if you see "running scripts is disabled")
 Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
@@ -58,7 +58,7 @@ pip install -r requirements.txt
 
 > **Alternative (no activation needed):** Call the venv Python directly:
 > ```powershell
-> & "D:\Local coding agent\venv\Scripts\python.exe" main.py --task "your task here"
+> & "D:\MatLab coding agent\venv\Scripts\python.exe" main.py --task "your task here"
 > ```
 
 ### 4. Configure (Optional)
@@ -89,7 +89,7 @@ python main.py --task "Simulate a DC motor" --timeout 150 --retries 3
 ## 📁 Project Structure
 
 ```
-D:\Local coding agent\
+D:\MatLab coding agent\
 ├── main.py                  # Entry point -- orchestrates the AutoGen pipeline
 ├── config.py                # All settings (LLM, MATLAB paths, timeouts, LLM_CONFIG)
 ├── agents/
@@ -166,7 +166,7 @@ OK  Code written to sandbox: moving_average_filter.m
 >> [3/3] Executing & Verifying MATLAB code...
 OK  Execution passed!
 OK  Saved to workspace:
-   >> D:\Local coding agent\workspace\moving_average_filter\moving_average_filter.m
+   >> D:\MatLab coding agent\workspace\moving_average_filter\moving_average_filter.m
 
 DONE  in 34.7s
 ```
